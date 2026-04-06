@@ -12,6 +12,7 @@ const summaryDir = ref('')
 const examples = ref('')
 const roleplay = ref('')
 const summary = ref('')
+const session = ref('')
 const party = ref('')
 const characters = ref('')
 const sessionName = ref('')
@@ -38,6 +39,7 @@ const runParams = computed(() => ({
   examples: exampleFiles.value,
   roleplay: roleplay.value,
   summary: summary.value,
+  session: session.value,
   party: party.value,
   characters: characters.value,
   session_name: sessionName.value,
@@ -76,6 +78,8 @@ onMounted(() => { loadFromConfig() })
 
       <!-- Style and context -->
       <div class="form-section">
+        <PathField v-model="session" label="Session recap (gmassistant)"
+          help="GM's structured recap. Provides scene names as the narrative skeleton — strongly recommended. Without this, the planner must infer structure from raw extractions." />
         <MultiPathField v-model="examples" label="Style example files"
           help="Handcrafted session summaries. Claude studies their voice, structure, humour, and dialogue style." />
         <PathField v-model="roleplay" label="Roleplay highlights (fallback)"
