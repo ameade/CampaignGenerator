@@ -36,6 +36,7 @@ const characters = ref('')
 const context = ref('')
 const narrateTokens = ref(4000)
 const proseMode = ref(false)
+const reflections = ref(false)
 const showOverrides = ref(false)
 
 function loadConfigFields() {
@@ -54,6 +55,7 @@ function loadConfigFields() {
   context.value = v.vtt_context || ''
   narrateTokens.value = v.sd_narrate_tokens || v.session_doc_narrate_tokens || 4000
   proseMode.value = v.sd_prose_mode || false
+  reflections.value = v.sd_reflections || false
 }
 
 const contextFiles = computed(() => resolvePathList(context.value))
@@ -80,6 +82,7 @@ async function applyConfig() {
     context: contextFiles.value.length ? contextFiles.value : [],
     narrate_tokens: narrateTokens.value || undefined,
     prose_mode: proseMode.value || undefined,
+    reflections: reflections.value || undefined,
     work_dir: config.cwd,
   }
   try {
@@ -566,6 +569,7 @@ onMounted(async () => {
             :narrating="narrating"
             :extracting="extracting"
             :prose-mode="proseMode"
+            :reflections="reflections"
             @save-extraction="saveExtraction"
             @save-roleplay="saveRoleplay"
             @reload="reload"
@@ -574,6 +578,7 @@ onMounted(async () => {
             @update:extraction-content="extractionContent = $event"
             @update:roleplay-content="roleplayContent = $event"
             @update:prose-mode="proseMode = $event; apiPut('/api/editor/config', { prose_mode: $event || undefined })"
+            @update:reflections="reflections = $event; apiPut('/api/editor/config', { reflections: $event || undefined })"
           />
           <NarrationOutput
             :output="narrationOutput"

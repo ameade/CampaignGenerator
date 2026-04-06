@@ -12,6 +12,7 @@ const props = defineProps<{
   narrating: boolean
   extracting: boolean
   proseMode: boolean
+  reflections: boolean
 }>()
 
 const emit = defineEmits<{
@@ -23,6 +24,7 @@ const emit = defineEmits<{
   'update:extractionContent': [content: string]
   'update:roleplayContent': [content: string]
   'update:proseMode': [value: boolean]
+  'update:reflections': [value: boolean]
 }>()
 
 const activeTab = ref<'extraction' | 'roleplay'>('extraction')
@@ -138,6 +140,11 @@ function openTypora() {
         <input type="checkbox" :checked="proseMode"
           @change="emit('update:proseMode', ($event.target as HTMLInputElement).checked)" />
         Prose
+      </label>
+      <label class="prose-toggle" :title="'Inject campaign history so the narrator can draw on past events as memories and reflections'">
+        <input type="checkbox" :checked="reflections"
+          @change="emit('update:reflections', ($event.target as HTMLInputElement).checked)" />
+        Memories
       </label>
       <span class="save-flash" :class="{ show: saveFlash }">Saved</span>
       <span style="flex:1"></span>

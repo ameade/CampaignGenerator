@@ -812,13 +812,30 @@ def build_narrate_prompt(narrator: str, focus: str, char_moments: str,
                           party: str | None, handoff: str, roster: str = "",
                           voice_note: str | None = None,
                           roleplay_summary: str | None = None,
-                          scene_text: str | None = None) -> str:
+                          scene_text: str | None = None,
+                          context_docs: list[str] | None = None) -> str:
     parts = [f"## Narrator: {narrator}\n## Focus: {focus}"]
     if roster:
         parts.append(f"## Character Classes (definitive — never contradict these)\n\n{roster}")
     if party:
         parts.append(f"## Party Document (authoritative source for character classes, "
                      f"abilities, and roles)\n\n{party.strip()}")
+    if context_docs:
+        combined = "\n\n---\n\n".join(context_docs)
+        parts.append(
+            f"## Campaign History\n\n"
+            f"This is the accumulated campaign context — past events, faction relationships, "
+            f"NPC histories, world conditions. When the current scene creates a natural "
+            f"opening, draw on this for a brief memory, reflection, or flashback:\n"
+            f"- A past decision that echoes in the current one\n"
+            f"- An NPC the narrator has history with\n"
+            f"- A cost or consequence that has been accumulating\n"
+            f"- A pattern the narrator has noticed repeating\n\n"
+            f"Keep it brief: one or two sentences of interior thought, then return to the "
+            f"present. Do not summarize the history. Let it surface as the narrator's "
+            f"inner life.\n\n"
+            f"{combined}"
+        )
     if scene_text:
         parts.append(
             f"## Scene: What Happened\n\n"
@@ -927,6 +944,10 @@ def main() -> None:
                         help="Strip all mechanical/game language and GM framing from narration. "
                              "GM descriptions become direct world perception; dice rolls and HP "
                              "become narrative consequence.")
+    parser.add_argument("--reflections", action="store_true",
+                        help="Inject campaign_state and world_state context into the narration "
+                             "prompt so the narrator can draw on past events as memories, "
+                             "flashbacks, and reflections. Requires --context files.")
     parser.add_argument("--no-log", action="store_true")
     parser.add_argument("--verbose", action="store_true",
                         help="Print the full system and user prompt before each API call")
@@ -1361,9 +1382,11 @@ def main() -> None:
             prose_mode=args.prose_mode,
         )
         scene_context = extract_scene_text(recap, scene_name) if scene_name and recap else None
+        narrate_context = context_parts if args.reflections and context_parts else None
         narrate_prompt = build_narrate_prompt(narrator, focus, char_moments, party, handoff,
                                               roster, voice_note, roleplay_summary,
-                                              scene_text=scene_context)
+                                              scene_text=scene_context,
+                                              context_docs=narrate_context)
         narration = stream_api(client, narrate_system, narrate_prompt,
                                args.model, max_tokens=narrate_tokens, verbose=args.verbose)
         print("─" * 60)
