@@ -209,6 +209,19 @@ Format each moment as:
 Keep everything in chronological order.
 IMPORTANT: Use ONLY the provided quotes for dialogue. Do not invent dialogue.
 Output only the extracted moments. No preamble, no commentary.
+
+SPEAKER LABEL NORMALISATION — apply to every dialogue attribution line:
+- GM or DM with any player name in parentheses (e.g. "Gabe", "GM (Gabe)", "DM (Gabe)") → always write as "GM"
+- Character names with a player name in parentheses (e.g. "Thorin (Joe)", "Grygum (Ben Pfaff)") → strip the parenthetical, write only the character name
+- Unnamed NPCs → keep as-is; do not invent a name
+
+OOC TABLE-TALK — cut entirely, do not include in the extraction:
+- Damage announcements: "16 more damage", "that's 22", "crit for 10 plus 6"
+- Roll calls: "Crit.", "nat 20", "I rolled an 8"
+- GM mechanical rulings spoken as the GM (not as an NPC): "You take 18", "roll perception"
+- Out-of-character reactions, jokes, and cross-talk between players as themselves
+The test: is the speaker talking AS their character TO another character in the fiction?
+If yes, it is dialogue — keep it. If no, it is table-talk — cut it.
 """
 
 GENERATE_EXTRACTION_PROSE_ADDENDUM = """\
@@ -218,14 +231,13 @@ all mechanical game language into narrative experience — in action beats, envi
 descriptions, and the closing sentence for each moment. Damage numbers, hit points, spell
 slots, saving throw DCs, and die results must not appear in the extraction.
 - Damage amounts → the weight and cost of the hit (scale: glancing / real impact /
-  serious / brutal — see the damage scale if needed)
+  serious / brutal)
 - Remaining HP statements → the character's felt condition and danger level
 - Spell slots → the effort or depletion of whatever resource the character draws on
 - Saving throw results → whether the character held, struggled, or was overcome
 
-Verbatim player quotes (dialogue) are kept as-is — players may use mechanical language
-in speech, and that is acceptable in dialogue lines. Translate only the descriptive text
-you write yourself.
+In-character dialogue lines (character speaking to another character in the fiction) are
+kept verbatim. Player table-talk has already been removed per the OOC rules above.
 """
 
 
