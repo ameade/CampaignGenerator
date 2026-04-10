@@ -218,10 +218,19 @@ SPEAKER LABEL NORMALISATION — apply to every dialogue attribution line:
 OOC TABLE-TALK — cut entirely, do not include in the extraction:
 - Damage announcements: "16 more damage", "that's 22", "crit for 10 plus 6"
 - Roll calls: "Crit.", "nat 20", "I rolled an 8"
+- Mechanical outcome announcements mixed with conditions: "16 damage and she's grappled"
+- Player mechanic explanations to the GM: "I'm using my Eldritch Tentacles to hit her",
+  "I action surge", "I cast X at Y level"
 - GM mechanical rulings spoken as the GM (not as an NPC): "You take 18", "roll perception"
 - Out-of-character reactions, jokes, and cross-talk between players as themselves
-The test: is the speaker talking AS their character TO another character in the fiction?
-If yes, it is dialogue — keep it. If no, it is table-talk — cut it.
+
+The test — ask both questions:
+1. Would this line make sense spoken by the character TO another character in the scene?
+2. Does it contain mechanical game language (damage, conditions, spell names as mechanics,
+   ability names)?
+If the answer to (2) is yes, it is table-talk — cut it regardless of the speaker label.
+A line labeled "Zalthir:" that announces "16 damage and she's grappled" is the player
+speaking to the table, not Zalthir speaking to Ilvara.
 """
 
 GENERATE_EXTRACTION_PROSE_ADDENDUM = """\
