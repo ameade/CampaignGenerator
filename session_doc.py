@@ -448,6 +448,13 @@ DO NOT invent or paraphrase dialogue that is not in the extracted moments.\
 
 PROSE_MODE_INSTRUCTION = """\
 PROSE MODE — IMMERSIVE NARRATION ONLY:
+
+CRITICAL: No mechanical numbers may appear in the prose — not damage values, not hit
+points, not spell slot numbers, not AC, not DCs, not die rolls. Not even in passing.
+Not even as part of a verbatim player quote. If a player said "I've got 16 HP left"
+or "that was 22 damage", those are table-talk, not story. Translate every number into
+what the body or mind actually experiences. A number that reaches the page is a failure.
+
 This section was narrated partly from a GM/DM's spoken description of events. Do NOT
 carry any of that framing into the prose:
 
