@@ -155,6 +155,15 @@ def _build_narrate_cmd(scene_num: int) -> list[str]:
         cmd += ["--prose-mode"]
     if CONFIG.get("reflections"):
         cmd += ["--reflections"]
+    # Pass context files (campaign state, world state) into narration
+    for ctx in CONFIG.get("context") or []:
+        if ctx:
+            cmd += ["--context", ctx]
+    # Enhanced sections: pass when the file exists and the toggle is on (default on)
+    if CONFIG.get("use_enhanced_sections", True) and CONFIG.get("extract_dir"):
+        enhanced_path = Path(CONFIG["extract_dir"]) / "enhanced_sections.md"
+        if enhanced_path.exists():
+            cmd += ["--enhanced-sections", str(enhanced_path)]
     return cmd
 
 
@@ -313,6 +322,15 @@ def api_assemble():
 
     stripped = [strip_header(p) for p in parts]
     content = f"{title_line}\n\n---\n\n" + "\n\n---\n\n".join(stripped) + "\n"
+
+    # Append enhanced sections (Pass 2 output) if present
+    if CONFIG.get("extract_dir"):
+        enhanced_path = Path(CONFIG["extract_dir"]) / "enhanced_sections.md"
+        if enhanced_path.exists():
+            enhanced_text = enhanced_path.read_text(encoding="utf-8").strip()
+            if enhanced_text:
+                content += "\n---\n\n" + enhanced_text + "\n"
+                print(f"  Appended enhanced_sections.md")
 
     out_path = _assembled_output_path()
     out_path.write_text(content, encoding="utf-8")
