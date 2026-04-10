@@ -211,6 +211,23 @@ IMPORTANT: Use ONLY the provided quotes for dialogue. Do not invent dialogue.
 Output only the extracted moments. No preamble, no commentary.
 """
 
+GENERATE_EXTRACTION_PROSE_ADDENDUM = """\
+
+PROSE MODE: The extraction will be used for immersive first-person narration. Translate
+all mechanical game language into narrative experience — in action beats, environmental
+descriptions, and the closing sentence for each moment. Damage numbers, hit points, spell
+slots, saving throw DCs, and die results must not appear in the extraction.
+- Damage amounts → the weight and cost of the hit (scale: glancing / real impact /
+  serious / brutal — see the damage scale if needed)
+- Remaining HP statements → the character's felt condition and danger level
+- Spell slots → the effort or depletion of whatever resource the character draws on
+- Saving throw results → whether the character held, struggled, or was overcome
+
+Verbatim player quotes (dialogue) are kept as-is — players may use mechanical language
+in speech, and that is acceptable in dialogue lines. Translate only the descriptive text
+you write yourself.
+"""
+
 
 async def _stream_generate_extraction(scene_num: int) -> AsyncGenerator[str, None]:
     """Generate a full extraction file from assigned quotes + recap."""
@@ -278,12 +295,16 @@ async def _stream_generate_extraction(scene_num: int) -> AsyncGenerator[str, Non
         model = _config().get("model", "claude-sonnet-4-6")
 
         # Stream the response
+        extract_system = GENERATE_EXTRACTION_SYSTEM
+        if _config().get("prose_mode"):
+            extract_system += GENERATE_EXTRACTION_PROSE_ADDENDUM
+
         chunks: list[str] = []
         response_gen = await asyncio.to_thread(
             lambda: client.messages.stream(
                 model=model,
                 max_tokens=8192,
-                system=GENERATE_EXTRACTION_SYSTEM,
+                system=extract_system,
                 messages=[{"role": "user", "content": user_prompt}],
             )
         )
