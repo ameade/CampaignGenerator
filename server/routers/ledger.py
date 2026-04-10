@@ -281,22 +281,15 @@ async def _stream_generate_extraction(scene_num: int) -> AsyncGenerator[str, Non
         if q.get("context"):
             quote_block.append(f"  [{q['context']}]")
 
-    # Load recap text for this scene's chunk range
+    # Load recap text for this scene
     recap_text = ""
     session_path = _config().get("session")
     if session_path and Path(session_path).exists():
         full_recap = Path(session_path).read_text(encoding="utf-8")
-        # Try to extract the relevant scene section from the recap
-        from session_doc import extract_section_text
+        from session_doc import extract_scene_text
         scene_name = scene.get("scene", "")
         if scene_name:
-            recap_text = extract_section_text(full_recap, scene_name)
-        if not recap_text:
-            # Fall back to Summary + Memorable Moments
-            recap_text = extract_section_text(full_recap, "Summary")
-            mm = extract_section_text(full_recap, "Memorable Moments")
-            if mm:
-                recap_text += "\n\n## Memorable Moments\n" + mm
+            recap_text = extract_scene_text(full_recap, scene_name)
 
     user_prompt = (
         f"## Scene {scene_num}\n"
