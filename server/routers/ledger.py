@@ -203,10 +203,12 @@ def _normalize_speaker(raw: str) -> str:
 
 
 async def _stream_generate_extraction(scene_num: int) -> AsyncGenerator[str, None]:
-    """Build a deterministic quote scaffold for scene N from assigned ledger quotes.
+    """Build a deterministic quote scaffold for scene N.
 
-    No LLM is involved.  The human adds action beat lines and removes OOC
-    table-talk before narrating — they are the filter, not the model.
+    Beat lines are copied verbatim from the GM recap (no LLM decision).
+    Quotes from the ledger are listed below the beats.
+    The human's job: move each quote under the beat where it belongs,
+    and remove OOC lines before narrating.
     """
     ledger = _get_ledger()
     scenes = _load_scenes()
@@ -227,20 +229,52 @@ async def _stream_generate_extraction(scene_num: int) -> AsyncGenerator[str, Non
         f"({len(quotes)} quote(s))...\n\n"
     )
 
-    if not quotes:
-        yield _sse_event("No quotes assigned to this scene — nothing to scaffold.\n")
-        yield _sse_done(1)
-        return
+    # ── Beats: copy verbatim from the GM recap ──────────────────────────────
+    beat_lines: list[str] = []
+    session_path = _config().get("session")
+    if session_path and Path(session_path).exists() and scene_name:
+        from session_doc import extract_scene_text
+        recap_text = extract_scene_text(
+            Path(session_path).read_text(encoding="utf-8"), scene_name
+        )
+        beat_lines = [
+            ln for ln in recap_text.splitlines()
+            if ln.strip().startswith("-")
+        ]
 
+    # ── Assemble scaffold ───────────────────────────────────────────────────
     lines = [
         f"[Scene {scene_num}] {scene_name}",
         f"Narrator: {narrator}",
         f"Focus: {focus}",
         "",
-        "<!-- Add action beats as lines starting with - then place quotes under them. -->",
-        "<!-- Remove any OOC lines (damage calls, mechanic announcements) before narrating. -->",
-        "",
     ]
+
+    if not beat_lines and not quotes:
+        yield _sse_event("No recap beats and no assigned quotes for this scene — nothing to scaffold.\n")
+        yield _sse_done(1)
+        return
+
+    if beat_lines:
+        # Beats first — quotes go under the beat where they belong
+        for beat in beat_lines:
+            lines.append(beat)
+            lines.append("")
+        if quotes:
+            lines += [
+                "<!-- Move each quote below under the beat where it belongs. -->",
+                "<!-- Remove OOC lines (damage calls, mechanic announcements) before narrating. -->",
+                "",
+                "## Quotes to place",
+                "",
+            ]
+    else:
+        lines += [
+            "<!-- No recap beats found. Add action beats as lines starting with -,",
+            "     then place quotes under them. Remove OOC lines before narrating. -->",
+            "",
+        ]
+
     for q in quotes:
         raw_speaker = q.get("character") or q.get("speaker") or "Unknown"
         speaker = _normalize_speaker(raw_speaker)
@@ -262,7 +296,7 @@ async def _stream_generate_extraction(scene_num: int) -> AsyncGenerator[str, Non
         yield _sse_event(content)
         yield _sse_event(
             f"\n\n[Saved to {fname}]\n"
-            "Add beat lines, remove OOC, then narrate."
+            "Place quotes under beats, remove OOC, then narrate."
         )
         yield _sse_done(0)
 
