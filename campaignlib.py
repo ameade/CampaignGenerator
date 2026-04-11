@@ -94,6 +94,15 @@ def load_file(path: str, base_dir: Path | None = None) -> str:
     return p.read_text(encoding="utf-8")
 
 
+def load_file_optional(path: str | Path, label: str = "file") -> str | None:
+    """Read a file, returning None (with a stderr warning) if it does not exist."""
+    p = Path(path).expanduser()
+    if not p.exists():
+        print(f"  Warning: {label} not found: {p}", file=sys.stderr)
+        return None
+    return p.read_text(encoding="utf-8")
+
+
 def assemble_docs(config: dict, doc_labels: list[str], base_dir: Path | None = None) -> str:
     """Load the requested document labels from config and join them with separators.
 

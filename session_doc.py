@@ -39,7 +39,7 @@ import re
 import sys
 from pathlib import Path
 
-from campaignlib import make_client, stream_api, save_log
+from campaignlib import load_file_optional, make_client, stream_api, save_log
 
 
 # ── Pass 1: Consistency check ──────────────────────────────────────────────────
@@ -1023,12 +1023,9 @@ def main() -> None:
 
     session_summary: str = ""
     if args.session_summary:
-        p = Path(args.session_summary).expanduser()
-        if p.exists():
-            session_summary = p.read_text(encoding="utf-8")
-            print(f"  Session summary:      {p.name} ({len(session_summary):,} chars)")
-        else:
-            print(f"  Warning: --session-summary file not found: {p}", file=sys.stderr)
+        session_summary = load_file_optional(args.session_summary, "--session-summary file") or ""
+        if session_summary:
+            print(f"  Session summary:      {Path(args.session_summary).name} ({len(session_summary):,} chars)")
 
     context_parts: list[str] = []
     if args.context:
@@ -1044,14 +1041,11 @@ def main() -> None:
     party: str | None = None
     roster: str = ""
     if args.party:
-        p = Path(args.party).expanduser()
-        if p.exists():
-            party = p.read_text(encoding="utf-8")
+        party = load_file_optional(args.party, "party file")
+        if party:
             roster = extract_character_roster(party)
             if roster:
                 print(f"  Character roster: {roster.count(chr(10)) + 1} character(s)")
-        else:
-            print(f"  Warning: party file not found: {p}", file=sys.stderr)
 
     voice_files: dict[str, str] = {}
     if args.voice_dir:
@@ -1066,12 +1060,9 @@ def main() -> None:
 
     roleplay_summary: str | None = None
     if args.roleplay_summary:
-        rp = Path(args.roleplay_summary).expanduser()
-        if rp.exists():
-            roleplay_summary = rp.read_text(encoding="utf-8")
-            print(f"  Roleplay summary: {rp.name} ({len(roleplay_summary):,} chars)")
-        else:
-            print(f"  Warning: roleplay summary not found: {rp}", file=sys.stderr)
+        roleplay_summary = load_file_optional(args.roleplay_summary, "roleplay summary")
+        if roleplay_summary:
+            print(f"  Roleplay summary: {Path(args.roleplay_summary).name} ({len(roleplay_summary):,} chars)")
 
     examples_text: str | None = None
     if args.examples:
@@ -1120,12 +1111,9 @@ def main() -> None:
     # Load enhanced sections (Pass 2 output saved from a prior run)
     enhanced_sections: str = ""
     if args.enhanced_sections:
-        p = Path(args.enhanced_sections).expanduser()
-        if p.exists():
-            enhanced_sections = p.read_text(encoding="utf-8")
-            print(f"  Enhanced sections: {p.name} ({len(enhanced_sections):,} chars)")
-        else:
-            print(f"  Warning: --enhanced-sections file not found: {p}", file=sys.stderr)
+        enhanced_sections = load_file_optional(args.enhanced_sections, "--enhanced-sections file") or ""
+        if enhanced_sections:
+            print(f"  Enhanced sections: {Path(args.enhanced_sections).name} ({len(enhanced_sections):,} chars)")
     elif from_extractions_dir:
         auto_enhanced = from_extractions_dir / "enhanced_sections.md"
         if auto_enhanced.exists():
@@ -1170,14 +1158,10 @@ def main() -> None:
         print("\n[Pass 1: Consistency check skipped — no --context files provided]")
 
     # ── Pass 2: Enhance structured sections ───────────────────────────────────
-    structured_sections = ""
     if from_extractions_dir or single_narrator:
         if not from_extractions_dir:
             print(f"[Pass 2: Skipped — single-narrator mode]")
-        if enhanced_sections:
-            structured_sections = enhanced_sections
     elif enhanced_sections:
-        structured_sections = enhanced_sections
         print(f"\n[Pass 2: Skipped — using pre-saved enhanced sections ({len(enhanced_sections):,} chars)]")
     else:
         print(f"\n[Pass 2: Enhance structured sections | model: {args.model}]")
@@ -1201,14 +1185,14 @@ def main() -> None:
                                  + party.strip())
 
         enhance_prompt = "\n\n---\n\n".join(enhance_parts)
-        structured_sections = stream_api(client, ENHANCE_SYSTEM, enhance_prompt, args.model,
-                                          verbose=args.verbose)
+        enhanced_sections = stream_api(client, ENHANCE_SYSTEM, enhance_prompt, args.model,
+                                       verbose=args.verbose)
         print("=" * 60)
 
         # Save to disk so the user can review, edit, and reuse in narration
-        if extract_dir and structured_sections:
+        if extract_dir and enhanced_sections:
             enhanced_out = extract_dir / "enhanced_sections.md"
-            enhanced_out.write_text(structured_sections, encoding="utf-8")
+            enhanced_out.write_text(enhanced_sections, encoding="utf-8")
             print(f"  Enhanced sections saved: {enhanced_out.name}")
 
     # ── Pass 3: Narrative plan ─────────────────────────────────────────────────
@@ -1455,8 +1439,8 @@ def main() -> None:
         # intentionally left out of the extraction.
         scene_events_str = ""
         if not from_extractions_dir:
-            if structured_sections and scene_name:
-                scene_events_str = extract_scene_text(structured_sections, scene_name)
+            if enhanced_sections and scene_name:
+                scene_events_str = extract_scene_text(enhanced_sections, scene_name)
             elif scene_name and recap:
                 scene_events_str = extract_scene_text(recap, scene_name)
         narrate_context = context_parts if args.reflections and context_parts else None
@@ -1519,7 +1503,7 @@ def main() -> None:
         else:
             log_sections = (
                 [("Consistency Report", consistency_report or "(skipped)"),
-                 ("Structured Sections", structured_sections),
+                 ("Structured Sections", enhanced_sections),
                  ("Narrative Plan", plan_text)] +
                 [(f"Section — {n}", t) for n, t in section_texts]
             )

@@ -20,7 +20,7 @@ const showAdvanced = ref(false)
 function loadFromConfig() {
   const v = config.values
   input.value = v.cs_input || v.summaries || ''
-  output.value = v.cs_output || v.campaign_state_output || ''
+  output.value = v.cs_output || v.campaign_state_output || v.campaign_state || ''
   trackFile.value = v.cs_track_file || v.tracking_file || ''
   extractDir.value = v.cs_extract_dir || ''
   chunkSize.value = v.cs_chunk_size || 60000

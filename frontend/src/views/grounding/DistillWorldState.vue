@@ -18,7 +18,7 @@ const showAdvanced = ref(false)
 function loadFromConfig() {
   const v = config.values
   input.value = v.distill_input || v.summaries || ''
-  output.value = v.distill_output || v.world_state_output || ''
+  output.value = v.distill_output || v.world_state_output || v.world_state || ''
   extractDir.value = v.distill_extract_dir || ''
   chunkSize.value = v.distill_chunk_size || 60000
   splitChapters.value = v.distill_split_chapters || ''

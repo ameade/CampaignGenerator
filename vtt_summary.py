@@ -29,7 +29,7 @@ import sys
 from datetime import date
 from pathlib import Path
 
-from campaignlib import chunk_text, make_client, save_log, stream_api
+from campaignlib import chunk_text, load_file_optional, make_client, save_log, stream_api
 
 
 EXTRACT_SYSTEM_BASE = """\
@@ -389,25 +389,21 @@ def main() -> None:
     if args.context:
         parts = []
         for ctx_path in args.context:
-            p = Path(ctx_path).expanduser()
-            if not p.exists():
-                print(f"Warning: context file not found, skipping: {p}", file=sys.stderr)
-                continue
-            parts.append(f"## {p.name}\n\n{p.read_text(encoding='utf-8').strip()}")
+            content = load_file_optional(ctx_path, "context file")
+            if content is not None:
+                parts.append(f"## {Path(ctx_path).name}\n\n{content.strip()}")
         if parts:
             context_text = "\n\n---\n\n".join(parts)
-            print(f"[Context: {len(args.context)} file(s), {len(context_text):,} chars]")
+            print(f"[Context: {len(parts)} file(s), {len(context_text):,} chars]")
 
     # Load optional reference summaries (GMassistant recap, Saga20, etc.)
     reference_text = ""
     if args.reference_summaries:
         parts = []
         for ref_path in args.reference_summaries:
-            p = Path(ref_path).expanduser()
-            if not p.exists():
-                print(f"Warning: reference summary not found, skipping: {p}", file=sys.stderr)
-                continue
-            parts.append(f"### {p.name}\n\n{p.read_text(encoding='utf-8').strip()}")
+            content = load_file_optional(ref_path, "reference summary")
+            if content is not None:
+                parts.append(f"### {Path(ref_path).name}\n\n{content.strip()}")
         if parts:
             reference_text = "\n\n---\n\n".join(parts)
             print(f"[Reference summaries: {len(parts)} file(s), {len(reference_text):,} chars]")

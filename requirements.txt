@@ -6,3 +6,5 @@ fastapi
 uvicorn
 requests
 mcp
+aiofiles
+pytest
