@@ -218,7 +218,7 @@ const sceneLabel = computed(() => {
           </button>
           <div class="toolbar-spacer" />
           <button class="btn-primary btn-sm" @click="emit('generate', currentScene)">
-            Generate Extraction
+            Scaffold from Quotes
           </button>
         </div>
       </div>

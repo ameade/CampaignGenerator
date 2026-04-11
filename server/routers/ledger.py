@@ -183,63 +183,31 @@ async def api_auto_assign():
     )
 
 
-# ── Generate extraction (Claude SSE) ─────────────────────────────────────
+# ── Generate extraction scaffold (deterministic) ──────────────────────────────
 
-GENERATE_EXTRACTION_SYSTEM = """\
-You are assembling a scene extraction file for a D&D session narrative.
+import re as _re
 
-You are given:
-- A scene's narrator, name, and focus
-- Verbatim VTT quotes assigned to this scene (the ONLY permitted source of dialogue)
-- (Optional) GM recap bullet points for this scene (the ONLY permitted source of action beats)
 
-Produce the extraction as grouped moments in chronological order.
+def _normalize_speaker(raw: str) -> str:
+    """Strip parenthetical player names; normalize GM/DM variants.
 
-Each moment is:
-- An action beat on its own line starting with "-" (copied verbatim from the recap)
-- Followed immediately (no indentation) by any quotes that occurred during that beat:
-  Speaker: "exact quote text"
-- Followed by a blank line before the next moment
-
-Place each assigned quote under the beat it most naturally belongs to — the beat that
-was happening when the character said it. Keep quotes in their original order relative
-to each other. Beats with no associated quotes appear alone. If quotes clearly precede
-all action beats, list them first with no preceding beat line.
-
-IMPORTANT: Use ONLY the assigned quotes for dialogue. Do not invent dialogue or use
-any dialogue from the recap text. Do not reorder quotes relative to each other.
-Do not add labels, headers, emotional closing lines, or any prose of your own.
-
-SPEAKER LABEL NORMALISATION — apply to every dialogue line:
-- GM or DM with any player name in parentheses (e.g. "GM (Gabe)", "DM (Gabe)") → write as "GM"
-- Character names with a player name in parentheses (e.g. "Thorin (Joe)") → strip parenthetical, write only the character name
-- Unnamed NPCs → keep as-is
-
-OOC TABLE-TALK — omit these quotes entirely:
-- Damage/roll announcements: "16 more damage", "nat 20", "crit for 10 plus 6"
-- Player mechanic explanations: "I action surge", "I cast X at Y level"
-- GM mechanical rulings (not NPC speech): "You take 18", "roll perception"
-- Out-of-character reactions and cross-talk
-
-The test: does the line contain mechanical game language (damage numbers, conditions, spell
-names as mechanics)? If yes — cut it, regardless of speaker label.
-"""
-
-GENERATE_EXTRACTION_PROSE_ADDENDUM = """\
-
-PROSE MODE: For action beat lines only, translate mechanical language into plain narrative
-description — no damage numbers, HP values, spell slot counts, or die results.
-- Damage amounts → the weight of the hit (glancing / real impact / serious / brutal)
-- Spell slots → the effort or resource the character draws on
-- Saving throws → whether the character held, struggled, or was overcome
-Dialogue lines are always kept verbatim. Do not alter quoted text.
-"""
+    Examples:
+      "Thorin (Joe)"   → "Thorin"
+      "GM (Gabe)"      → "GM"
+      "DM"             → "GM"
+    """
+    name = _re.sub(r'\s*\([^)]+\)', '', raw).strip()
+    if name.upper() in ("GM", "DM"):
+        name = "GM"
+    return name
 
 
 async def _stream_generate_extraction(scene_num: int) -> AsyncGenerator[str, None]:
-    """Generate a full extraction file from assigned quotes + recap."""
-    import asyncio
+    """Build a deterministic quote scaffold for scene N from assigned ledger quotes.
 
+    No LLM is involved.  The human adds action beat lines and removes OOC
+    table-talk before narrating — they are the filter, not the model.
+    """
     ledger = _get_ledger()
     scenes = _load_scenes()
 
@@ -249,81 +217,53 @@ async def _stream_generate_extraction(scene_num: int) -> AsyncGenerator[str, Non
         return
 
     scene = scenes[scene_num - 1]
+    narrator = scene["narrator"]
+    scene_name = scene.get("scene", "")
+    focus = scene.get("focus", "")
     quotes = ledger.get_scene_quotes(scene_num)
 
-    yield _sse_event(f"Generating extraction for Scene {scene_num}: "
-                     f"{scene['narrator']} — {scene.get('scene', '')} "
-                     f"({len(quotes)} quote(s))...\n")
+    yield _sse_event(
+        f"Scaffolding Scene {scene_num}: {narrator} — {scene_name} "
+        f"({len(quotes)} quote(s))...\n\n"
+    )
 
-    # Build quote text
-    quote_block = []
-    for q in quotes:
-        quote_block.append(f"{q['character']}: \"{q['quote_text']}\"")
-        if q.get("context"):
-            quote_block.append(f"  [{q['context']}]")
-
-    # Load recap text for this scene
-    recap_text = ""
-    session_path = _config().get("session")
-    if session_path and Path(session_path).exists():
-        full_recap = Path(session_path).read_text(encoding="utf-8")
-        from session_doc import extract_scene_text
-        scene_name = scene.get("scene", "")
-        if scene_name:
-            recap_text = extract_scene_text(full_recap, scene_name)
-
-    if not recap_text and not quote_block:
-        yield _sse_event("No quotes assigned and no recap found for this scene — nothing to generate.\n")
+    if not quotes:
+        yield _sse_event("No quotes assigned to this scene — nothing to scaffold.\n")
         yield _sse_done(1)
         return
 
-    user_prompt = (
-        f"## Scene {scene_num}\n"
-        f"Narrator: {scene['narrator']}\n"
-        f"Scene: {scene.get('scene', 'N/A')}\n"
-        f"Focus: {scene.get('focus', 'N/A')}\n"
-    )
-    if quote_block:
-        user_prompt += f"\n## Assigned Quotes\n" + "\n".join(quote_block)
-    if recap_text:
-        user_prompt += f"\n\n## GM Recap Context\n{recap_text}"
+    lines = [
+        f"[Scene {scene_num}] {scene_name}",
+        f"Narrator: {narrator}",
+        f"Focus: {focus}",
+        "",
+        "<!-- Add action beats as lines starting with - then place quotes under them. -->",
+        "<!-- Remove any OOC lines (damage calls, mechanic announcements) before narrating. -->",
+        "",
+    ]
+    for q in quotes:
+        raw_speaker = q.get("character") or q.get("speaker") or "Unknown"
+        speaker = _normalize_speaker(raw_speaker)
+        text = q["quote_text"]
+        context = q.get("context", "")
+        if context:
+            lines.append(f"<!-- {context} -->")
+        lines.append(f'{speaker}: "{text}"')
+        lines.append("")
 
-    yield _sse_event("Calling Claude...\n\n")
+    content = "\n".join(lines)
 
     try:
-        from campaignlib import make_client
-        client = make_client()
-        model = _config().get("model", "claude-sonnet-4-6")
-
-        # Stream the response
-        extract_system = GENERATE_EXTRACTION_SYSTEM
-        if _config().get("prose_mode"):
-            extract_system += GENERATE_EXTRACTION_PROSE_ADDENDUM
-
-        chunks: list[str] = []
-        response_gen = await asyncio.to_thread(
-            lambda: client.messages.stream(
-                model=model,
-                max_tokens=8192,
-                system=extract_system,
-                messages=[{"role": "user", "content": user_prompt}],
-            )
-        )
-
-        with response_gen as stream:
-            for text in stream.text_stream:
-                chunks.append(text)
-                yield _sse_event(text)
-
-        full_response = "".join(chunks)
-
-        # Save extraction file
         from session_doc import extraction_filename
-        fname = extraction_filename(scene_num, scene["narrator"], scene.get("scene", ""))
+        fname = extraction_filename(scene_num, narrator, scene_name)
         extract_path = Path(_config()["extract_dir"]) / fname
-        extract_path.write_text(full_response, encoding="utf-8")
+        extract_path.write_text(content, encoding="utf-8")
 
-        yield _sse_event(f"\n\nSaved to {fname}\n")
+        yield _sse_event(content)
+        yield _sse_event(
+            f"\n\n[Saved to {fname}]\n"
+            "Add beat lines, remove OOC, then narrate."
+        )
         yield _sse_done(0)
 
     except Exception as e:

@@ -25,6 +25,10 @@ const examplesDir = ref('')
 const sdContext = ref('')
 const showOverrides = ref(false)
 
+// ── Plan review state ──
+const planContent = ref('')
+const planLoading = ref(false)
+
 function loadFromConfig() {
   const v = config.values
   characters.value = v.sd_characters || v.session_doc_characters || ''
@@ -43,6 +47,19 @@ function loadFromConfig() {
   sdContext.value = v.sd_context || v.vtt_context || ''
 }
 
+async function fetchPlan() {
+  const dir = resolvePath(extractDir.value)
+  if (!dir) return
+  planLoading.value = true
+  try {
+    const res = await fetch(`/api/workflow/plan?extract_dir=${encodeURIComponent(dir)}`)
+    const data = await res.json()
+    if (data.ok) planContent.value = data.content
+  } finally {
+    planLoading.value = false
+  }
+}
+
 const contextFiles = computed(() => resolvePathList(sdContext.value))
 
 const ready = computed(() =>
@@ -50,7 +67,9 @@ const ready = computed(() =>
      roleplayDir.value.trim() && characters.value.trim())
 )
 
-const runParams = computed(() => ({
+const planGenerated = computed(() => planContent.value.trim().length > 0)
+
+const sharedParams = computed(() => ({
   session: resolvePath(sdSession.value),
   roleplay_dir: resolvePath(roleplayDir.value),
   extract_dir: resolvePath(extractDir.value),
@@ -68,8 +87,23 @@ const runParams = computed(() => ({
   model: config.model,
 }))
 
+// Phase 1: generate plan
+const generatePlanParams = computed(() => sharedParams.value)
+
+// Phase 2: run extraction from reviewed plan
+const runExtractionParams = computed(() => ({
+  ...sharedParams.value,
+  // plan_file defaults to {extract_dir}/plan.md on the backend if omitted
+}))
+
+function onPlanDone(rc: number) {
+  if (rc === 0) fetchPlan()
+}
+
 onMounted(() => {
   loadFromConfig()
+  // Pre-load plan if extract_dir is already configured
+  if (extractDir.value.trim()) fetchPlan()
 })
 </script>
 
@@ -78,8 +112,8 @@ onMounted(() => {
     <div class="page-header">
       <h2>Scene Extraction</h2>
       <p class="subtitle">
-        Run passes 1-4 of session_doc.py: consistency check, section enhancement,
-        narrative plan, and per-scene character extraction.
+        Two-step workflow: generate and review the narrative plan (Passes 1–3),
+        then run per-scene character extraction (Pass 4).
       </p>
     </div>
 
@@ -139,14 +173,47 @@ onMounted(() => {
         Set a session directory on the Config page to auto-populate paths.
       </div>
 
-      <!-- Run panel -->
-      <RunPanel
-        endpoint="/api/workflow/run/scene-extraction"
-        :params="runParams"
-        :disabled="!ready"
-        label="Run Extraction (Passes 1-4)"
-        @done="() => {}"
-      />
+      <!-- Phase 1: Generate Plan -->
+      <div class="phase-section">
+        <div class="phase-label">Step 1 — Generate narrative plan (Passes 1–3)</div>
+        <RunPanel
+          endpoint="/api/workflow/run/generate-plan"
+          :params="generatePlanParams"
+          :disabled="!ready"
+          label="Generate Plan"
+          @done="onPlanDone"
+        />
+      </div>
+
+      <!-- Plan review area -->
+      <div class="plan-section" v-if="planGenerated || planLoading">
+        <div class="plan-header">
+          <span class="phase-label">Plan review</span>
+          <button class="btn-neutral btn-sm" @click="fetchPlan" :disabled="planLoading">
+            {{ planLoading ? 'Loading…' : 'Reload' }}
+          </button>
+        </div>
+        <p class="plan-help">
+          Review the plan below. Edit <code>plan.md</code> in your editor if needed,
+          then run extraction.
+        </p>
+        <textarea class="plan-textarea" readonly :value="planContent" />
+      </div>
+
+      <!-- Phase 2: Run Extraction -->
+      <div class="phase-section">
+        <div class="phase-label">Step 2 — Run per-scene extraction (Pass 4)</div>
+        <RunPanel
+          endpoint="/api/workflow/run/scene-extraction"
+          :params="runExtractionParams"
+          :disabled="!ready || !planGenerated"
+          label="Run Extraction"
+          @done="() => {}"
+        />
+        <p v-if="!planGenerated && ready" class="phase-disabled-hint">
+          Generate the plan first (Step 1).
+        </p>
+      </div>
     </div>
   </div>
 </template>
@@ -191,5 +258,60 @@ onMounted(() => {
   font-size: 11px;
   color: var(--blue);
   line-height: 1.5;
+}
+
+.phase-section {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding-bottom: 12px;
+  border-bottom: 1px solid var(--bg-surface0);
+}
+
+.phase-label {
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--text-sub);
+}
+
+.phase-disabled-hint {
+  font-size: 10px;
+  color: var(--text-muted);
+  margin: 0;
+}
+
+.plan-section {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding-bottom: 12px;
+  border-bottom: 1px solid var(--bg-surface0);
+}
+
+.plan-header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.plan-help {
+  font-size: 10px;
+  color: var(--text-muted);
+  margin: 0;
+}
+
+.plan-textarea {
+  width: 100%;
+  min-height: 180px;
+  padding: 8px;
+  border-radius: 4px;
+  border: 1px solid var(--bg-surface1);
+  background: var(--bg-mantle);
+  color: var(--text);
+  font-family: var(--mono);
+  font-size: 10px;
+  line-height: 1.5;
+  resize: vertical;
+  box-sizing: border-box;
 }
 </style>

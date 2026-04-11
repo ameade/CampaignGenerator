@@ -948,6 +948,10 @@ def main() -> None:
                              "Useful when the auto-generated plan has overlap issues.")
     parser.add_argument("--plan-only", action="store_true",
                         help="Run through the narrative plan and exit without generating text")
+    parser.add_argument("--no-plan-review", action="store_true",
+                        help="Skip the Pass 3 plan-review checkpoint and continue into "
+                             "extraction immediately. Use when --plan-file is not available "
+                             "but the plan is already known-good.")
     parser.add_argument("--extract-dir", metavar="DIR",
                         help="Save each scene's pass-4 extraction to this directory (one file "
                              "per scene, plus plan.md). Edit the files, then re-run with "
@@ -1345,6 +1349,20 @@ def main() -> None:
         plan_save = extract_dir / "plan.md"
         plan_save.write_text(plan_text, encoding="utf-8")
         print(f"  Plan saved to: {plan_save}")
+
+        # Mandatory human checkpoint: stop here so the user can review plan.md
+        # before Pass 4 commits tokens to per-scene extraction.
+        # Does NOT fire when --plan-file was supplied (human already reviewed it),
+        # --from-extractions is active (narration-only mode), or --no-plan-review.
+        if not args.plan_file and not from_extractions_dir and not args.no_plan_review:
+            print(
+                f"\n[Pass 3 checkpoint] Review the plan before running extraction:\n"
+                f"  {plan_save}\n\n"
+                f"Then re-run with:\n"
+                f"  --plan-file {plan_save} --extract-only\n"
+                f"  or --from-extractions {extract_dir}  (if extractions already exist)"
+            )
+            return
 
     # ── Passes 4 & 5: Extract then narrate ────────────────────────────────────
     section_texts: list[tuple[str, str]] = []
