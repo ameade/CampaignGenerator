@@ -5,3 +5,5 @@ pyvis
 fastapi
 uvicorn
 requests
+aiofiles
+pytest
