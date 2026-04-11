@@ -74,6 +74,7 @@ async def run_narrative(
     examples: list[str] = Query(default=[]),
     roleplay: str = "",
     summary: str = "",
+    session: str = "",
     party: str = "",
     characters: str = "",
     session_name: str = "",
@@ -91,6 +92,7 @@ async def run_narrative(
     _cmd_multi(cmd, "--examples", examples)
     _cmd_opt(cmd, "--roleplay", roleplay)
     _cmd_opt(cmd, "--summary", summary)
+    _cmd_opt(cmd, "--session", session)
     _cmd_opt(cmd, "--party", party)
     _cmd_opt(cmd, "--characters", characters.strip())
     _cmd_opt(cmd, "--session-name", session_name.strip())

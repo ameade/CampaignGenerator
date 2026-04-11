@@ -151,6 +151,19 @@ def _build_narrate_cmd(scene_num: int) -> list[str]:
         cmd += ["--roleplay-summary", CONFIG["roleplay_summary"]]
     if CONFIG.get("narrate_tokens"):
         cmd += ["--narrate-tokens", str(CONFIG["narrate_tokens"])]
+    if CONFIG.get("prose_mode"):
+        cmd += ["--prose-mode"]
+    if CONFIG.get("reflections"):
+        cmd += ["--reflections"]
+    # Pass context files (campaign state, world state) into narration
+    for ctx in CONFIG.get("context") or []:
+        if ctx:
+            cmd += ["--context", ctx]
+    # Enhanced sections: pass when the file exists and the toggle is on (default on)
+    if CONFIG.get("use_enhanced_sections", True) and CONFIG.get("extract_dir"):
+        enhanced_path = Path(CONFIG["extract_dir"]) / "enhanced_sections.md"
+        if enhanced_path.exists():
+            cmd += ["--enhanced-sections", str(enhanced_path)]
     return cmd
 
 

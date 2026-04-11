@@ -108,9 +108,22 @@ class ScabardClient:
         resp.raise_for_status()
 
     def _get(self, url: str) -> dict:
-        resp = requests.get(url, headers=self._headers(), timeout=self._timeout)
-        self._raise_for_status(resp)
-        return resp.json()
+        last_exc: Exception | None = None
+        for attempt in range(4):
+            resp = requests.get(url, headers=self._headers(), timeout=self._timeout)
+            if resp.status_code == 429:
+                wait = 5 * (2 ** attempt)
+                time.sleep(wait)
+                last_exc = ScabardRateLimitError(
+                    "Rate limit exceeded.",
+                    status_code=429,
+                    detail=resp.text,
+                )
+                continue
+            self._raise_for_status(resp)
+            return resp.json()
+        raise last_exc or ScabardRateLimitError("Rate limit exceeded after 4 retries.",
+                                                status_code=429)
 
     def _post(self, url: str, payload: dict) -> dict:
         """POST with exponential-backoff retry on 429 (rate limited).

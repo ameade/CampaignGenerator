@@ -35,6 +35,9 @@ const examplesDir = ref('')
 const characters = ref('')
 const context = ref('')
 const narrateTokens = ref(4000)
+const proseMode = ref(false)
+const reflections = ref(false)
+const useEnhancedSections = ref(true)
 const showOverrides = ref(false)
 
 function loadConfigFields() {
@@ -52,6 +55,9 @@ function loadConfigFields() {
   characters.value = v.sd_characters || v.session_doc_characters || ''
   context.value = v.vtt_context || ''
   narrateTokens.value = v.sd_narrate_tokens || v.session_doc_narrate_tokens || 4000
+  proseMode.value = v.sd_prose_mode || false
+  reflections.value = v.sd_reflections || false
+  useEnhancedSections.value = v.sd_use_enhanced_sections !== false
 }
 
 const contextFiles = computed(() => resolvePathList(context.value))
@@ -77,6 +83,9 @@ async function applyConfig() {
     characters: characters.value || undefined,
     context: contextFiles.value.length ? contextFiles.value : [],
     narrate_tokens: narrateTokens.value || undefined,
+    prose_mode: proseMode.value || undefined,
+    reflections: reflections.value || undefined,
+    use_enhanced_sections: useEnhancedSections.value,
     work_dir: config.cwd,
   }
   try {
@@ -428,6 +437,34 @@ onMounted(async () => {
               min="1000" step="500" />
             <div class="field-help">Per-scene output cap (default: 4000). Override per-scene with "tokens: N" in extraction file.</div>
           </div>
+          <div class="field">
+            <label class="field-label checkbox-label">
+              <input type="checkbox" v-model="proseMode" @change="applyConfig" />
+              Prose mode
+            </label>
+            <div class="field-help">Strip all mechanical language and GM framing. GM descriptions become the narrator's direct perception; dice rolls and HP become narrative consequence.</div>
+          </div>
+          <div class="field">
+            <label class="field-label checkbox-label">
+              <input type="checkbox" v-model="useEnhancedSections" />
+              Use enhanced scene data
+            </label>
+            <div class="field-help">
+              When on, narration receives the corrected event list from
+              <code>enhanced_sections.md</code> (Pass 2 output) and campaign context files.
+              Turn off to narrate from the extraction file only — useful for comparing results.
+            </div>
+          </div>
+          <div class="field">
+            <label class="field-label checkbox-label">
+              <input type="checkbox" v-model="reflections" @change="applyConfig" />
+              Reflections
+            </label>
+            <div class="field-help">
+              Inject campaign history (context files) into narration as memories and backstory references.
+              Useful when the scene calls for a character to reflect on past events or relationships.
+            </div>
+          </div>
         </div>
 
         <!-- Optional overrides -->
@@ -450,7 +487,7 @@ onMounted(async () => {
             <PathField v-model="examplesDir" label="Examples directory"
               help="Handcrafted .md style references for narration." />
             <MultiPathField v-model="context" label="Campaign context files"
-              help="campaign_state.md, world_state.md — used by extraction passes." />
+              help="campaign_state.md, world_state.md — used by extraction passes and injected into narration as campaign context." />
           </div>
         </div>
 
@@ -555,6 +592,9 @@ onMounted(async () => {
             :is-roleplay-local="isRoleplayLocal"
             :narrating="narrating"
             :extracting="extracting"
+            :prose-mode="proseMode"
+            :reflections="reflections"
+            :use-enhanced-sections="useEnhancedSections"
             @save-extraction="saveExtraction"
             @save-roleplay="saveRoleplay"
             @reload="reload"
@@ -562,6 +602,9 @@ onMounted(async () => {
             @open-typora="openTypora"
             @update:extraction-content="extractionContent = $event"
             @update:roleplay-content="roleplayContent = $event"
+            @update:prose-mode="proseMode = $event; apiPut('/api/editor/config', { prose_mode: $event || undefined })"
+            @update:reflections="reflections = $event; apiPut('/api/editor/config', { reflections: $event || undefined })"
+            @update:use-enhanced-sections="useEnhancedSections = $event"
           />
           <NarrationOutput
             :output="narrationOutput"
@@ -613,6 +656,13 @@ onMounted(async () => {
   height: 100%;
   overflow-y: auto;
 }
+.checkbox-label {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  cursor: pointer;
+}
+.checkbox-label input { accent-color: var(--mauve); }
 .page { padding: 20px 24px; max-width: 700px; }
 .page-header { margin-bottom: 20px; }
 .page-header h2 { font-size: 16px; font-weight: 700; color: var(--text); margin-bottom: 4px; }

@@ -24,7 +24,7 @@ import argparse
 import sys
 from pathlib import Path
 
-from campaignlib import make_client, stream_api
+from campaignlib import chunk_text, make_client, stream_api
 
 FILTER_SYSTEM = """\
 You are searching D&D session notes for information relevant to a specific query.
@@ -57,22 +57,6 @@ Be concise. Output only the answer — no preamble, no "based on the extracts" f
 """
 
 
-def chunk_text(text: str, chunk_size: int) -> list[str]:
-    chunks = []
-    start = 0
-    while start < len(text):
-        end = start + chunk_size
-        if end >= len(text):
-            chunks.append(text[start:])
-            break
-        boundary = text.rfind("\n\n", start, end)
-        if boundary == -1 or boundary <= start:
-            boundary = text.rfind("\n", start, end)
-        if boundary == -1 or boundary <= start:
-            boundary = end
-        chunks.append(text[start:boundary])
-        start = boundary
-    return [c.strip() for c in chunks if c.strip()]
 
 
 def run_query(client, text: str, query: str, chunk_size: int, model: str, verbose: bool) -> list[str]:

@@ -93,6 +93,37 @@ focus: [one sentence]
  every chunk must be covered by at least one section)
 """
 
+PLAN_SCENE_SYSTEM = """\
+You are assigning narrators to scenes for a first-person D&D session narrative.
+
+You will be given:
+- A list of scenes (from the GM's session recap) — already in chronological order
+- A list of available narrators
+- Roleplay extractions from the session — use these to see which character had the
+  most interesting moments in each scene, to inform your narrator assignments
+
+Your job: assign exactly one narrator to each scene. Rotate through the roster so every
+character narrates at least once (distribute evenly if scenes > characters).
+
+Write a one-sentence FOCUS on the emotional/dramatic core of THIS narrator's experience
+in THIS scene — not what happened in the scene, but what the narrator specifically felt,
+feared, hoped for, or noticed.
+
+Output ONLY the plan in this exact format — no preamble, no commentary:
+
+## Scene 1
+narrator: [name]
+scene: [exact scene name from the list]
+focus: [one sentence — this narrator's specific emotional/dramatic core]
+
+## Scene 2
+narrator: [name]
+scene: [exact scene name]
+focus: [one sentence]
+
+(one section per scene — use the exact scene names — rotate narrators across the roster)
+"""
+
 # ── Pass 2: Per-section character extraction ───────────────────────────────────
 
 CHAR_EXTRACT_SYSTEM = """\
@@ -268,15 +299,58 @@ def load_extractions(extract_dir: Path) -> list[tuple[str, str]]:
     return [(f.name, f.read_text(encoding="utf-8").strip()) for f in files]
 
 
+def extract_scene_text(recap: str, scene_name: str) -> str:
+    """Return the text of a single named scene from the recap's ## Scenes section."""
+    lines = recap.splitlines()
+    in_scenes = False
+    in_target = False
+    collected: list[str] = []
+    for line in lines:
+        if line.strip() == "## Scenes":
+            in_scenes = True
+            continue
+        if in_scenes and line.startswith("## "):
+            break
+        if in_scenes and line.startswith("### "):
+            if in_target:
+                break
+            if line.strip("# ").strip().lower() == scene_name.lower():
+                in_target = True
+            continue
+        if in_target:
+            collected.append(line)
+    return "\n".join(collected).strip()
+
+
+def list_scenes(recap: str) -> list[str]:
+    """Return scene names (in order) from the recap's ## Scenes section."""
+    names: list[str] = []
+    in_scenes = False
+    for line in recap.splitlines():
+        if line.strip() == "## Scenes":
+            in_scenes = True
+        elif line.startswith("## ") and in_scenes:
+            break
+        elif in_scenes and line.startswith("### "):
+            names.append(line.strip("# ").strip())
+    return names
+
+
 def build_plan_prompt(extractions: list[tuple[str, str]], characters: list[str],
                       summary: str | None, party: str | None,
                       session_name: str,
-                      summary_extractions: list[tuple[str, str]] | None = None) -> str:
+                      summary_extractions: list[tuple[str, str]] | None = None,
+                      scenes: list[str] | None = None) -> str:
     parts = []
     if session_name:
         parts.append(f"# Session: {session_name}")
     if characters:
         parts.append("## Available narrators\n" + "\n".join(f"- {c}" for c in characters))
+    if scenes:
+        parts.append(
+            "## Session Scenes (from the GM's recap — assign one narrator to each)\n\n"
+            + "\n".join(f"- {s}" for s in scenes)
+        )
     chunk_parts = [f"### Chunk {i}\n\n{content}"
                    for i, (_, content) in enumerate(extractions, 1)]
     parts.append("## Roleplay Extractions\n"
@@ -298,7 +372,8 @@ def build_plan_prompt(extractions: list[tuple[str, str]], characters: list[str],
 
 def parse_plan(plan_text: str, total_chunks: int) -> list[dict]:
     sections = []
-    for block in re.split(r"(?m)^## Section \d+", plan_text):
+    # Support both "## Section N" (chunk mode) and "## Scene N" (scene mode)
+    for block in re.split(r"(?m)^## (?:Section|Scene) \d+", plan_text):
         block = block.strip()
         if not block:
             continue
@@ -307,6 +382,8 @@ def parse_plan(plan_text: str, total_chunks: int) -> list[dict]:
             line = line.strip()
             if line.startswith("narrator:"):
                 section["narrator"] = line.split(":", 1)[1].strip()
+            elif line.startswith("scene:"):
+                section["scene"] = line.split(":", 1)[1].strip()
             elif line.startswith("chunks:"):
                 raw = line.split(":", 1)[1].strip()
                 m = re.match(r"(\d+)\s*[-–]\s*(\d+)", raw)
@@ -321,8 +398,13 @@ def parse_plan(plan_text: str, total_chunks: int) -> list[dict]:
                         section["chunk_end"]   = n
             elif line.startswith("focus:"):
                 section["focus"] = line.split(":", 1)[1].strip()
-        if "narrator" in section and "chunk_start" in section:
-            # Clamp to valid range
+        if "narrator" in section and "scene" in section and "chunk_start" not in section:
+            # Scene mode: search all chunks; scope comes from scene text, not chunk range
+            section["chunk_start"] = 1
+            section["chunk_end"] = total_chunks
+            sections.append(section)
+        elif "narrator" in section and "chunk_start" in section:
+            # Chunk mode: clamp to valid range
             section["chunk_start"] = max(1, min(section["chunk_start"], total_chunks))
             section["chunk_end"]   = max(section["chunk_start"],
                                          min(section["chunk_end"], total_chunks))
@@ -333,13 +415,22 @@ def parse_plan(plan_text: str, total_chunks: int) -> list[dict]:
 def build_char_extract_prompt(section: dict,
                                extractions: list[tuple[str, str]],
                                summary_extractions: list[tuple[str, str]] | None = None,
-                               roster: str = "") -> str:
+                               roster: str = "",
+                               scene_text: str = "") -> str:
     start = section["chunk_start"] - 1
     end   = section["chunk_end"]
 
     parts = []
     if roster:
         parts.append(f"## Character Classes (definitive — never contradict these)\n\n{roster}")
+
+    if scene_text:
+        parts.append(
+            f"## Scene scope: {section.get('scene', 'this scene')}\n"
+            f"(defines what this scene covers — extract ONLY moments that fall within it)\n\n"
+            f"{scene_text}"
+        )
+
     roleplay_chunks = [f"### Chunk {start + i + 1}\n\n{content}"
                        for i, (_, content) in enumerate(extractions[start:end])]
     parts.append("## Roleplay Extractions\n"
@@ -359,13 +450,23 @@ def build_char_extract_prompt(section: dict,
 
 def build_narrate_prompt(narrator: str, focus: str, char_moments: str,
                           party: str | None, handoff: str, roster: str = "",
-                          voice_note: str | None = None) -> str:
+                          voice_note: str | None = None,
+                          scene_text: str | None = None) -> str:
     parts = [f"## Narrator: {narrator}\n## Focus: {focus}"]
     if roster:
         parts.append(f"## Character Classes (definitive — never contradict these)\n\n{roster}")
     if party:
         parts.append(f"## Party Document (authoritative source for character classes, "
                      f"abilities, and roles)\n\n{party.strip()}")
+    if scene_text:
+        parts.append(
+            f"## Scene: What Happened\n\n"
+            f"This is the GM's authoritative account of what occurred in this scene. "
+            f"Use it as the structural skeleton — the events, decisions, and NPC reactions "
+            f"that the narration must cover. The character's Roleplay Moments (below) "
+            f"provide verbatim quotes and character-specific beats to weave in.\n\n"
+            f"{scene_text.strip()}"
+        )
     if voice_note:
         parts.append(f"## {narrator}'s Voice Notes (written by the player — "
                      f"follow these precisely)\n\n{voice_note}")
@@ -391,6 +492,10 @@ def main() -> None:
                         help="Synthesized Roleplay Highlights (fallback if no extract dir).")
     parser.add_argument("--summary", metavar="FILE",
                         help="Session summary — event context for the planning pass only.")
+    parser.add_argument("--session", metavar="FILE",
+                        help="GM session recap (gmassistant output). When provided, the pipeline "
+                             "becomes scene-driven: scenes are extracted from the recap's ## Scenes "
+                             "section and used as the structural skeleton for planning and narration.")
     parser.add_argument("--party", metavar="FILE",
                         help="party.md — backstory, personality, relationships.")
     parser.add_argument("--characters", metavar="NAMES",
@@ -450,6 +555,11 @@ def main() -> None:
                   f"({total_chars:,} chars)")
 
     summary = load_file_safe(args.summary, "summary") if args.summary else None
+    session_recap = load_file_safe(args.session, "session recap") if args.session else None
+    scene_list = list_scenes(session_recap) if session_recap else None
+    if scene_list:
+        print(f"  Session scenes: {len(scene_list)} "
+              f"({', '.join(scene_list[:3])}{'...' if len(scene_list) > 3 else ''})")
     party   = load_file_safe(args.party,   "party")   if args.party   else None
     roster  = extract_character_roster(party) if party else ""
     if roster:
@@ -487,11 +597,13 @@ def main() -> None:
     client = make_client()
 
     # ── Pass 1: Plan ──────────────────────────────────────────────────────────
-    print(f"\n[Pass 1: Plan | {len(extractions)} chunk(s) | model: {args.model}]")
+    plan_system = PLAN_SCENE_SYSTEM if scene_list else PLAN_SYSTEM
+    mode_label = "scene" if scene_list else "chunk"
+    print(f"\n[Pass 1: Plan | {len(extractions)} chunk(s) | mode: {mode_label} | model: {args.model}]")
     print("=" * 60)
     plan_prompt = build_plan_prompt(extractions, characters, summary, party, args.session_name,
-                                    summary_extractions or None)
-    plan_text = stream_api(client, PLAN_SYSTEM, plan_prompt, args.model)
+                                    summary_extractions or None, scenes=scene_list)
+    plan_text = stream_api(client, plan_system, plan_prompt, args.model)
     print("=" * 60)
 
     sections = parse_plan(plan_text, len(extractions))
@@ -502,8 +614,9 @@ def main() -> None:
 
     print(f"\nPlan: {len(sections)} section(s)")
     for i, s in enumerate(sections, 1):
-        print(f"  {i}. {s['narrator']:15s}  chunks {s['chunk_start']}–{s['chunk_end']}  "
-              f"— {s.get('focus', '')}")
+        scene_label = f"  [{s['scene']}]" if s.get("scene") else ""
+        print(f"  {i}. {s['narrator']:15s}  chunks {s['chunk_start']}–{s['chunk_end']}"
+              f"{scene_label}  — {s.get('focus', '')}")
 
     if characters:
         assigned = {s["narrator"] for s in sections}
@@ -520,25 +633,30 @@ def main() -> None:
     handoff = ""
 
     for i, section in enumerate(sections, 1):
-        narrator = section["narrator"]
-        focus    = section.get("focus", "")
-        chunks   = f"chunks {section['chunk_start']}–{section['chunk_end']}"
+        narrator   = section["narrator"]
+        focus      = section.get("focus", "")
+        scene_name = section.get("scene", "")
+        chunks     = f"chunks {section['chunk_start']}–{section['chunk_end']}"
+        scene_text = (extract_scene_text(session_recap, scene_name)
+                      if session_recap and scene_name else "")
 
         # Pass 2: character-specific extraction (silent)
-        print(f"\n[Pass 2.{i}/{len(sections)}: Extract — {narrator} ({chunks})]")
+        scene_info = f" [{scene_name}]" if scene_name else ""
+        print(f"\n[Pass 2.{i}/{len(sections)}: Extract — {narrator} ({chunks}){scene_info}]")
         char_extract_system = CHAR_EXTRACT_SYSTEM.replace("{narrator}", narrator)
         char_extract_prompt = build_char_extract_prompt(section, extractions,
-                                                         summary_extractions or None, roster)
+                                                         summary_extractions or None,
+                                                         roster, scene_text)
         char_moments = stream_api(client, char_extract_system, char_extract_prompt,
                                   args.model, max_tokens=4096, silent=True)
         print(f"  → {len(char_moments):,} chars of {narrator}'s moments")
 
         # Pass 3: narrate from character-specific moments
-        print(f"[Pass 3.{i}/{len(sections)}: Narrate — {narrator}]")
+        print(f"[Pass 3.{i}/{len(sections)}: Narrate — {narrator}{scene_info}]")
         print("─" * 60)
         voice_note = get_voice_note(voice_files, narrator) if voice_files else None
         narrate_prompt = build_narrate_prompt(narrator, focus, char_moments, party, handoff,
-                                              roster, voice_note)
+                                              roster, voice_note, scene_text or None)
         narrate_system = build_narrate_system(examples_text)
         narration = stream_api(client, narrate_system, narrate_prompt,
                                args.model, max_tokens=12000)

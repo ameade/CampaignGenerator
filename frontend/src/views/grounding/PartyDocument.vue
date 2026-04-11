@@ -15,6 +15,7 @@ const context = ref('')
 const output = ref('')
 const extractDir = ref('')
 const chunkSize = ref(60000)
+const splitChapters = ref('')
 const synthOnly = ref(false)
 const noLog = ref(false)
 const showAdvanced = ref(false)
@@ -29,6 +30,7 @@ function loadFromConfig() {
   output.value = v.party_output || ''
   extractDir.value = v.party_extract_dir || ''
   chunkSize.value = v.party_chunk_size || 60000
+  splitChapters.value = v.party_split_chapters || ''
 }
 
 const charFiles = computed(() =>
@@ -58,6 +60,7 @@ const runParams = computed(() => ({
   output: output.value,
   extract_dir: extractDir.value,
   chunk_size: chunkSize.value,
+  split_chapters: splitChapters.value,
   synthesize_only: synthOnly.value,
   no_log: noLog.value,
   model: config.model,
@@ -123,8 +126,16 @@ onMounted(() => { loadFromConfig() })
           <PathField v-model="extractDir" label="Extractions directory" resolve-base="campaign"
             help="Where intermediate party_extractions/ files are saved." />
           <div class="field">
+            <label class="field-label">Split by session prefix</label>
+            <input type="text" class="field-input" v-model="splitChapters"
+              placeholder="e.g. # Session — splits at each session heading" />
+            <span class="field-help">When set, each session becomes one extract chunk. Overrides chunk size.</span>
+          </div>
+          <div class="field">
             <label class="field-label">Chunk size (chars)</label>
-            <input type="number" class="field-input" v-model.number="chunkSize" min="10000" step="5000" />
+            <input type="number" class="field-input" v-model.number="chunkSize" min="10000" step="5000"
+              :disabled="!!splitChapters" />
+            <span class="field-help">Ignored when split-by-prefix is set. Default 60,000.</span>
           </div>
           <div class="field">
             <label class="checkbox-label">
@@ -177,6 +188,9 @@ onMounted(() => { loadFromConfig() })
   align-items: center; gap: 6px; cursor: pointer;
 }
 .checkbox-label input { accent-color: var(--mauve); }
+
+.field-help { display: block; font-size: 10px; color: var(--text-muted); margin-top: 3px; }
+.field-input:disabled { opacity: 0.4; cursor: not-allowed; }
 
 .advanced-panel {
   margin-top: 10px; padding: 10px;

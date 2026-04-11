@@ -185,14 +185,16 @@ Your job: identify the key scenes in the session and assign one narrator to each
 CRITICAL: If an "Available narrators" list is provided:
 - Use ONLY those characters as narrators. Never assign a scene to an NPC, a guest
   character, or anyone not on the list — even if they have interesting moments.
-- Each character must narrate at least one scene per chunk. With 4 characters and
-  2 chunks, every character should appear in chunk 1 AND in chunk 2.
-- Distribute scenes as evenly as possible — aim for the same number of scenes per
-  character. Do not give one character three scenes and another only one.
+- Distribute narrators based on who has the most interesting perspective on each scene.
+  A character may narrate more than one scene. Rotate when perspectives are equal.
 
-CRITICAL: Together, the scenes must cover the ENTIRE session chronologically.
-If a "Session Scenes" checklist is provided, every scene on that list must appear
-in your plan. Do not stop until all of them are assigned a narrator.
+CRITICAL: If a "Session Scenes" checklist is provided:
+- Use EXACTLY those scenes and no others. Do not invent additional scenes.
+- Every scene on the checklist must appear in your plan with a narrator assigned.
+- The checklist is the complete and authoritative list of scenes for this session.
+
+If no checklist is provided, identify the key scenes yourself and cover the entire
+session chronologically.
 
 For each scene:
 - Give it a short name (3–6 words)
@@ -221,7 +223,7 @@ chunks: 2
 scene: [short scene name]
 focus: [one sentence]
 
-(cover all major events — rotate narrators — every character must appear at least once)
+(assign every scene a narrator — pick the best perspective — every character should appear if possible)
 """
 
 # ── Pass 4: Per-character extraction ──────────────────────────────────────────
@@ -261,12 +263,21 @@ For each moment, format as:
 [for action/environment: describe what happened and what {narrator} experienced]
 [one sentence: what this moment felt like or cost]
 
-Keep everything in chronological order. Do not skip quiet or wordless moments — they are
+Keep everything in chronological order, following the sequence of events as they appear
+in the scene scope. The scene scope defines the authoritative event order — do not
+reorder, skip, or reorganise events. Do not skip quiet or wordless moments — they are
 the texture between the dramatic exchanges.
 
 IMPORTANT: Only extract dialogue that actually appears in the Roleplay Extractions.
 Do not invent or paraphrase exchanges. If no verbatim dialogue exists for this scene,
 extract action beats and environmental moments only — that is a valid output.
+
+SPEAKER LABEL NORMALISATION — apply to every dialogue attribution line:
+- GM or DM with any player name in parentheses → always write as "GM"
+  e.g. "GM (Kostadis)", "DM (Kostadis)", "Kostadis (GM)" → "GM"
+- Character names with a player name in parentheses → strip the parenthetical
+  e.g. "Thorin (Joe)" → "Thorin", "Grygum (Ben Pfaff)" → "Grygum"
+- Unnamed NPCs (e.g. "Warrior", "Guard", "Voice") → keep as-is; do not invent a name
 
 Output only the extracted moments. No preamble.
 """
@@ -278,11 +289,11 @@ You are writing one section of a first-person D&D session narrative.
 
 You will be given:
 - The narrator's name and a one-sentence focus
-{scene_scope_line}- A handoff line from the previous narrator (if any)
+{scene_scope_line}{scene_events_line}- A handoff line from the previous narrator (if any)
 - This character's extracted moments — their exact dialogue, reactions, and emotional beats
 - A party document with backstory, personality, and relationships
 {examples_block}
-{length_instruction}
+{rendering_instruction}{length_instruction}
 Every significant moment in the extracted list should appear in the text.
 
 {dialogue_instruction}
@@ -293,11 +304,21 @@ FOCUS ON:
 - How their backstory and relationships colour what they said and why
 
 ALLOW:
-- Non-linear structure — flashbacks, digressions, a character's mind drifting
+- Non-linear structure for the narrator's inner life — flashbacks, memories, digressions,
+  a character's mind drifting to something from their past
 - The narrator's voice intruding on the action ("He tries not to stare...")
 - Humour, irony, self-deprecation — if that fits the character
 - Short, punchy paragraphs and sentence fragments for rhythm
 - Dates or scene headers if they help orient the reader
+
+CRITICAL: The actual events of the session must appear in the order they occur in the
+extracted moments. Do not reorder, move, or restructure session events — only the
+narrator's internal thoughts and memories may be non-linear.
+
+CRITICAL: This is a first-person memoir. The narrator is always "I". Never use "he",
+"she", or "they" to refer to the narrator — not even in passing. If you find yourself
+writing "[Name] did X", you have left first person — recast it as "I did X". Third
+person is a hard failure in this narration.
 
 AVOID:
 - Summarizing or paraphrasing lines that are already quoted — use the actual words
@@ -425,8 +446,164 @@ moment of action), write from action beats and environment only.
 DO NOT invent or paraphrase dialogue that is not in the extracted moments.\
 """
 
+PROSE_MODE_INSTRUCTION = """\
+PROSE MODE — IMMERSIVE NARRATION ONLY:
 
-def build_narrate_system(examples_text: str | None, scene: str | None = None) -> str:
+CRITICAL: No mechanical numbers may appear in the prose — not damage values, not hit
+points, not spell slot numbers, not AC, not DCs, not die rolls. Not even in passing.
+Not even as part of a verbatim player quote. If a player said "I've got 16 HP left"
+or "that was 22 damage", those are table-talk, not story. Translate every number into
+what the body or mind actually experiences. A number that reaches the page is a failure.
+
+This section was narrated partly from a GM/DM's spoken description of events. Do NOT
+carry any of that framing into the prose:
+
+- The narrator experiences the world directly. There is no "the DM told us" or "the GM
+  described" or "we were informed by the narrator." The world simply is, and the
+  character perceives it.
+- NPCs speak. Their dialogue is heard, not relayed. Never write "the DM said [NPC]
+  told us X" — write what the NPC said, or what the narrator heard.
+- All mechanical language must be converted to narrative consequence:
+    BAD: "she failed her saving throw against the DC 15 Wisdom check"
+    GOOD: "she flinched, something behind her eyes going distant and soft"
+    BAD: "he took 14 piercing damage and dropped to 7 HP"
+    GOOD: "the bolt punched through his shoulder and he went down hard"
+    BAD: "I used my last spell slot"
+    GOOD: "there was nothing left — whatever I had in me, I had already spent it"
+- Game mechanic instructions ("Roll a DC-14 Wisdom saving throw", "Make a Dexterity
+  check", "Roll for initiative") mark the moment a challenge arrives — they are NOT
+  prose. Translate them to what the character experiences in that instant:
+    BAD:  "Roll a DC-14 Wisdom saving throw."
+    BAD:  "*Roll a DC-14 Wisdom saving throw.*"
+    GOOD: "Something pressed against my mind — cold, insistent, trying to get in."
+    GOOD: "My focus narrowed to a single point. Hold. Just hold."
+  Never reproduce the instruction in any form, italicised or otherwise.
+- DC numbers are difficulty, not prose. Translate them by scale:
+    DC 10 or below → a routine effort, something that costs focus but little else
+    DC 14–15       → a hard push, real resistance, the outcome genuinely uncertain
+    DC 20          → near the edge of what a person can do; draining, costly
+    DC 25+         → the kind of thing that leaves a mark; almost impossible
+  Translate the ability or skill into the thing it actually represents:
+    Wisdom / Will   → clarity under pressure, holding the self together, not flinching
+    Intelligence    → recall, deduction, the mind working fast under duress
+    Charisma        → force of presence, the voice that cuts through, force of will
+    Strength        → raw physical effort, the body pushed to its limit
+    Dexterity       → speed, precision, the body moving before the mind catches up
+    Constitution    → endurance, absorbing punishment, staying on your feet
+    Skill checks    → the specific act: a Stealth check is breath held and footfall
+                      controlled; an Athletics check is muscle and will against weight;
+                      a Persuasion check is every ounce of personality directed at one person
+    BAD: "Roll a DC-14 Wisdom saving throw."
+    GOOD: "Something in her pressed back — the part that stays calm when everything
+           else is coming apart. It held. Barely."
+- "Turn" language reflects the rhythm of combat — not a game mechanic. Translate:
+    "my turn"            → my moment, when the opening came, when I had room to act
+    "end of my turn"     → when the moment passed, when I had a breath, before I moved again
+    "next turn"          → the next time I had an opening, when I got my footing back
+    "saving throw at     → waiting for the condition to break — enduring it, holding on
+     end of my turn"       until I could shake it or someone reached me
+    BAD:  "I waited for the end of my turn. The fear would break then."
+    GOOD: "I held my ground and waited for the feeling to pass — the cold clutch of it
+           loosening beat by beat until I could think straight again and move."
+- Damage amounts reflect the wearing down of endurance, focus, and defenses — not literal
+  flesh wounds. Scale the narrative weight to the number, with no blood or gore:
+    1–10   → glancing, absorbed, barely registers — a bruise through armor, a scrape,
+              something shaken off without breaking stride
+    10–20  → real impact, felt through the defenses — a hard hit that costs something,
+              the kind that makes you adjust, tighten up, recalculate
+    20–40  → serious — a blow that takes a chunk out of what's left, the body or mind
+              warning that there isn't much margin remaining
+    40+    → brutal — the kind of hit that drops lesser creatures outright; for a typed
+              source (necrotic drain, dragon breath, fireball, cold, lightning) it is
+              acceptable to describe pain, suffering, or the specific sensation of that
+              damage type — the burning, the cold seeping in, the vital energy being pulled
+              away — but keep it visceral rather than gory
+  Examples:
+    BAD:  "She took 48 points of bludgeoning damage."
+    BAD:  "The attack dealt 8 damage."
+    GOOD (8 damage):  "The blow landed but didn't bite deep — she'd felt worse."
+    GOOD (22 damage): "That one got through. Something cracked — not broke, but the margin
+                       was shrinking."
+    GOOD (48 damage, bludgeoning): "The impact was enormous. The kind that doesn't just
+                       hurt — it reorganizes your understanding of what hurt means."
+    GOOD (48 damage, necrotic): "Something cold and wrong moved through her — not pain
+                       exactly, more like absence, like warmth being taken rather than
+                       heat being applied. She could feel what it was pulling away."
+- When a player states remaining HP ("I've got 18 hit points left of 44"), translate this
+  to the character's felt condition — never mention the number. The threshold that matters
+  is whether they're likely to survive the next serious hit:
+      < 10 HP  → on the verge of collapse; barely standing; the next solid hit ends it;
+                  running on instinct and survival reflex alone
+      10–19 HP → the edge; one more bad round and it's over; the character knows this —
+                  it changes how they move, what risks they take, how much they're pushing
+                  through rather than fighting clean
+      20–35 HP → worn down, feeling it, the hits have accumulated — but there's still
+                  margin; they can take more, though not much more
+      35+ HP   → hurt but functional; the fight has cost something real but the reserve
+                  is still there
+  A player saying "I think I can take one more round of hits" is the character doing
+  internal triage — counting what's left and knowing the answer isn't comfortable.
+  Render that calculation, not the arithmetic.
+      BAD:  "I had 18 hit points remaining."
+      BAD:  "I was at less than half health."
+      GOOD (18 HP): "I was still on my feet. Barely. One more round like that and I
+                     wouldn't be."
+      GOOD (8 HP):  "I was running on something that wasn't quite strength anymore —
+                     reflex, maybe, or the body's last argument against stopping."
+- When a character rolls a critical success (natural 20) on an ABILITY CHECK or SKILL
+  CHECK — not an attack roll — the narration should reflect that something exceptional
+  happened, not just that it worked. This is the moment where everything clicked: the
+  body moved perfectly, the mind was razor-sharp, the words landed exactly right. The
+  character should feel it — the rare, clean sensation of having absolutely nailed
+  something. Not lucky. Not barely. Definitively.
+    BAD: "I picked the lock." (success but flat)
+    BAD: "I managed to persuade her." (success but flat)
+    GOOD: "My fingers found the tumblers before I even thought about it — the lock gave
+           like it had been waiting for me. I almost laughed."
+    GOOD: "I said the right thing. I knew it the moment it left my mouth — the exact
+           word, the exact weight. I could see it land."
+- Dice rolls, attack rolls, spell slots, challenge ratings, and game statistics have no
+  place in this prose. Replace every one of them with what the character would actually
+  experience, feel, or observe.
+- DM scene descriptions are the world as the character PERCEIVES it — not commentary
+  from a narrator standing outside the story. When the source material contains the DM
+  setting a scene ("the hall is dark, torches sputtering, the smell of blood in the
+  air"), render it as direct sensory experience:
+    BAD:  "the DM described a dark hall with guttering torches"
+    BAD:  "we were told the air smelled of blood"
+    GOOD: "the torches had gone out, and the dark pressed in; the smell hit me first"
+- DM dramatic framing is the character's emotional reality — not a narrator's
+  commentary on the significance of events. When the source material contains the DM
+  building stakes or emotional weight ("this isn't just a fight — she is everything
+  you've been fighting toward"), render it as what the character FEELS in that moment:
+    BAD:  "the encounter was described as momentous"
+    BAD:  "the narrator told us this enemy was significant"
+    GOOD: "something in my chest understood, before my mind caught up, that this was
+           what all of it had been building toward"
+- GM/DM out-of-character remarks — table banter, reactions to player jokes, meta-commentary,
+  anything the GM says as a person at the table rather than as a narrator or NPC voice — are
+  cut entirely. They have no narrative equivalent. Do not paraphrase them, attribute them,
+  or let them leave a trace in the prose. If the GM laughs at a player's quip, that laugh
+  does not exist in the story.
+    BAD:  "The GM, to his credit, said he hoped more pleasantly."
+    BAD:  "Kostadis laughed."
+    GOOD: [the line simply does not appear]
+  The rule of thumb: if a GM line is responding to a player — rather than describing the
+  world or voicing an NPC — it gets cut.
+- Speaker labels such as "GM (Kostadis)", "DM (Kostadis)", "GM (Name)", "DM (Name)",
+  "Kostadis (GM)", or "Kostadis (DM)" all identify the game master's out-of-character
+  voice. GM and DM are the same role — the same person. Never reference these people by name in the prose
+  — not as players, not as someone who "handed" or "told" the narrator something, not in
+  any form. The narrator does not receive information from a person at the table. They
+  simply know, perceive, or realize the thing. Tactical explanations become instinct or
+  calculation. Scene-setting becomes direct sensory experience. The real person's name
+  must not appear in the output.\
+"""
+
+
+def build_narrate_system(examples_text: str | None, scene: str | None = None,
+                         prose_mode: bool = False,
+                         has_scene_events: bool = False) -> str:
     if examples_text:
         block = "\n" + EXAMPLES_BLOCK.replace("{examples}", examples_text.strip()) + "\n"
     else:
@@ -445,11 +622,27 @@ def build_narrate_system(examples_text: str | None, scene: str | None = None) ->
         scope = ""
         length = "Write as many paragraphs as needed to cover all the extracted moments — typically 4–8, but do not stop early."
         dialogue = DIALOGUE_INSTRUCTION_FULL
-    return (NARRATE_SYSTEM_BASE
-            .replace("{examples_block}", block)
-            .replace("{scene_scope_line}", scope)
-            .replace("{length_instruction}", length)
-            .replace("{dialogue_instruction}", dialogue))
+    if has_scene_events:
+        scene_events_line = ("- Scene Events (authoritative) — the ordered account of what "
+                             "happened; render from this faithfully\n"
+                             "- Campaign Context — character backstory, NPC states, world detail\n")
+        rendering = ("The Scene Events list is the authoritative account of what occurred. "
+                     "Render it in this character's voice. Do not add events that are not listed. "
+                     "The extracted moments below are your primary source for verbatim quotes — "
+                     "weave those lines in exactly as written.\n\n")
+    else:
+        scene_events_line = ""
+        rendering = ""
+    result = (NARRATE_SYSTEM_BASE
+              .replace("{examples_block}", block)
+              .replace("{scene_scope_line}", scope)
+              .replace("{scene_events_line}", scene_events_line)
+              .replace("{rendering_instruction}", rendering)
+              .replace("{length_instruction}", length)
+              .replace("{dialogue_instruction}", dialogue))
+    if prose_mode:
+        result += "\n\n" + PROSE_MODE_INSTRUCTION
+    return result
 
 
 def parse_plan(plan_text: str, total_chunks: int) -> list[dict]:
@@ -639,31 +832,69 @@ def build_char_extract_prompt(section: dict,
 def build_narrate_prompt(narrator: str, focus: str, char_moments: str,
                           party: str | None, handoff: str, roster: str = "",
                           voice_note: str | None = None,
-                          roleplay_summary: str | None = None) -> str:
+                          roleplay_summary: str | None = None,
+                          scene_text: str | None = None,
+                          context_docs: list[str] | None = None) -> str:
     parts = [f"## Narrator: {narrator}\n## Focus: {focus}"]
     if roster:
         parts.append(f"## Character Classes (definitive — never contradict these)\n\n{roster}")
     if party:
         parts.append(f"## Party Document (authoritative source for character classes, "
                      f"abilities, and roles)\n\n{party.strip()}")
+    if context_docs:
+        combined = "\n\n---\n\n".join(context_docs)
+        parts.append(
+            f"## Campaign History\n\n"
+            f"This is the accumulated campaign context — past events, faction relationships, "
+            f"NPC histories, world conditions. When the current scene creates a natural "
+            f"opening, draw on this for a brief memory, reflection, or flashback:\n"
+            f"- A past decision that echoes in the current one\n"
+            f"- An NPC the narrator has history with\n"
+            f"- A cost or consequence that has been accumulating\n"
+            f"- A pattern the narrator has noticed repeating\n\n"
+            f"Keep it brief: one or two sentences of interior thought, then return to the "
+            f"present. Do not summarize the history. Let it surface as the narrator's "
+            f"inner life.\n\n"
+            f"{combined}"
+        )
+    if scene_text:
+        parts.append(
+            f"## Scene: What Happened\n\n"
+            f"This is the GM's authoritative account of what occurred in this scene. "
+            f"Use it as the structural skeleton — the events, decisions, and NPC reactions "
+            f"that the narration must cover. The character's Roleplay Moments (below) "
+            f"provide verbatim quotes and character-specific beats to weave in.\n\n"
+            f"{scene_text.strip()}"
+        )
     if voice_note:
         parts.append(f"## {narrator}'s Voice Notes (written by the player — "
                      f"follow these precisely)\n\n{voice_note}")
     if roleplay_summary:
         parts.append(
             f"## Session Roleplay Summary\n\n"
-            f"This is the synthesised roleplay document for this session — character voices "
-            f"with actual quotes, verbatim memorable exchanges, standout moments, and "
-            f"Voice Keeper Notes.\n\n"
-            f"Use this as an authoritative reference:\n"
-            f"- **Memorable Exchanges**: reproduce these verbatim where they fall in your scene\n"
+            f"This document covers the full session — use it for voice and style reference only.\n"
             f"- **Character Voices**: match the speech patterns and register shown here\n"
             f"- **Voice Keeper Notes**: let PC emotional states and NPC patterns shape the prose\n\n"
+            f"The dialogue to include in this scene comes exclusively from "
+            f"## {narrator}'s Roleplay Moments below — not from this document.\n\n"
             f"{roleplay_summary.strip()}"
         )
     if handoff:
         parts.append(f"## Handoff from previous narrator\n\"{handoff}\"")
-    parts.append(f"## {narrator}'s Roleplay Moments\n\n{char_moments.strip()}")
+    # When an authoritative scene account is provided, rename the extraction block to
+    # make clear it is the quote source, not the event source
+    if scene_text:
+        parts.append(f"## Verbatim Quotes — {narrator}\n"
+                     f"(weave these into the narrative exactly as written)\n\n"
+                     f"{char_moments.strip()}")
+    else:
+        parts.append(
+            f"## {narrator}'s Scene Moments\n"
+            f"(grouped format: each action beat line starting with \"-\" is followed by "
+            f"the dialogue that occurred during it — narrate beat and quotes together "
+            f"as a single moment; beats with no quotes are action-only moments)\n\n"
+            f"{char_moments.strip()}"
+        )
     return "\n\n---\n\n".join(parts)
 
 
@@ -741,10 +972,23 @@ def main() -> None:
     parser.add_argument("--dry-run", action="store_true",
                         help="Build and print all prompts for passes 4-5 without calling the API. "
                              "Useful for inspecting what each scene sends before committing.")
+    parser.add_argument("--prose-mode", action="store_true",
+                        help="Strip all mechanical/game language and GM framing from narration. "
+                             "GM descriptions become direct world perception; dice rolls and HP "
+                             "become narrative consequence.")
+    parser.add_argument("--reflections", action="store_true",
+                        help="Inject campaign_state and world_state context into the narration "
+                             "prompt so the narrator can draw on past events as memories, "
+                             "flashbacks, and reflections. Requires --context files.")
     parser.add_argument("--no-log", action="store_true")
     parser.add_argument("--verbose", action="store_true",
                         help="Print the full system and user prompt before each API call")
     parser.add_argument("--model", default="claude-sonnet-4-6")
+    parser.add_argument("--enhanced-sections", metavar="FILE",
+                        help="Use a pre-saved Pass 2 output file instead of re-running Pass 2. "
+                             "When --from-extractions is used, auto-detected as "
+                             "enhanced_sections.md in that directory. Injected as scene context "
+                             "and campaign context in narration (Pass 5).")
     parser.add_argument("--fast", action="store_true",
                         help="Use Haiku instead of Sonnet (~4x cheaper, faster, slightly lower quality)")
     args = parser.parse_args()
@@ -869,6 +1113,21 @@ def main() -> None:
                       "(or pass --plan-file explicitly).", file=sys.stderr)
                 sys.exit(1)
 
+    # Load enhanced sections (Pass 2 output saved from a prior run)
+    enhanced_sections: str = ""
+    if args.enhanced_sections:
+        p = Path(args.enhanced_sections).expanduser()
+        if p.exists():
+            enhanced_sections = p.read_text(encoding="utf-8")
+            print(f"  Enhanced sections: {p.name} ({len(enhanced_sections):,} chars)")
+        else:
+            print(f"  Warning: --enhanced-sections file not found: {p}", file=sys.stderr)
+    elif from_extractions_dir:
+        auto_enhanced = from_extractions_dir / "enhanced_sections.md"
+        if auto_enhanced.exists():
+            enhanced_sections = auto_enhanced.read_text(encoding="utf-8")
+            print(f"  Enhanced sections: auto-detected ({len(enhanced_sections):,} chars)")
+
     client = make_client()
 
     single_narrator = args.narrator.strip() if args.narrator else None
@@ -911,6 +1170,11 @@ def main() -> None:
     if from_extractions_dir or single_narrator:
         if not from_extractions_dir:
             print(f"[Pass 2: Skipped — single-narrator mode]")
+        if enhanced_sections:
+            structured_sections = enhanced_sections
+    elif enhanced_sections:
+        structured_sections = enhanced_sections
+        print(f"\n[Pass 2: Skipped — using pre-saved enhanced sections ({len(enhanced_sections):,} chars)]")
     else:
         print(f"\n[Pass 2: Enhance structured sections | model: {args.model}]")
         print("=" * 60)
@@ -936,6 +1200,12 @@ def main() -> None:
         structured_sections = stream_api(client, ENHANCE_SYSTEM, enhance_prompt, args.model,
                                           verbose=args.verbose)
         print("=" * 60)
+
+        # Save to disk so the user can review, edit, and reuse in narration
+        if extract_dir and structured_sections:
+            enhanced_out = extract_dir / "enhanced_sections.md"
+            enhanced_out.write_text(structured_sections, encoding="utf-8")
+            print(f"  Enhanced sections saved: {enhanced_out.name}")
 
     # ── Pass 3: Narrative plan ─────────────────────────────────────────────────
     if args.plan_file:
@@ -1162,8 +1432,19 @@ def main() -> None:
 
         # Pass 5: narrate from character-specific moments
         voice_note = get_voice_note(voice_files, narrator) if voice_files else None
+        # In --from-extractions mode the extraction file IS the scope — do not pass
+        # scene_text or the model will narrate content from the recap that the user
+        # intentionally left out of the extraction.
+        scene_events_str = ""
+        if not from_extractions_dir:
+            if structured_sections and scene_name:
+                scene_events_str = extract_scene_text(structured_sections, scene_name)
+            elif scene_name and recap:
+                scene_events_str = extract_scene_text(recap, scene_name)
+        narrate_context = context_parts if args.reflections and context_parts else None
         extras = [x for x in ["voice notes" if voice_note else "",
-                               "roleplay summary" if roleplay_summary else ""] if x]
+                               "roleplay summary" if roleplay_summary else "",
+                               "enhanced context" if (scene_events_str or narrate_context) else ""] if x]
         print(f"[Pass 5 scene {i}: Narrate — {label}"
               f"{' (' + ', '.join(extras) + ')' if extras else ''}]")
         print("─" * 60)
@@ -1171,10 +1452,14 @@ def main() -> None:
         # the style constraint is already carried by voice notes and the handoff.
         narrate_system = build_narrate_system(
             None if scene_name else examples_text,
-            scene=scene_name or None
+            scene=scene_name or None,
+            prose_mode=args.prose_mode,
+            has_scene_events=bool(scene_events_str or narrate_context)
         )
         narrate_prompt = build_narrate_prompt(narrator, focus, char_moments, party, handoff,
-                                              roster, voice_note, roleplay_summary)
+                                              roster, voice_note, roleplay_summary,
+                                              scene_text=scene_events_str or None,
+                                              context_docs=narrate_context)
         narration = stream_api(client, narrate_system, narrate_prompt,
                                args.model, max_tokens=narrate_tokens, verbose=args.verbose)
         print("─" * 60)
@@ -1199,7 +1484,6 @@ def main() -> None:
         doc_parts.append(f"# {title}\n")
         for narrator, narration in section_texts:
             doc_parts.append(f"---\n\n## {narrator}\n\n{narration}")
-        doc_parts.append("---\n\n" + structured_sections.strip())
 
     full_doc = "\n\n".join(doc_parts) + "\n"
 

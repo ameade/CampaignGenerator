@@ -11,6 +11,9 @@ const props = defineProps<{
   isRoleplayLocal: boolean
   narrating: boolean
   extracting: boolean
+  proseMode: boolean
+  reflections: boolean
+  useEnhancedSections: boolean
 }>()
 
 const emit = defineEmits<{
@@ -21,6 +24,9 @@ const emit = defineEmits<{
   'open-typora': [type: string]
   'update:extractionContent': [content: string]
   'update:roleplayContent': [content: string]
+  'update:proseMode': [value: boolean]
+  'update:reflections': [value: boolean]
+  'update:useEnhancedSections': [value: boolean]
 }>()
 
 const activeTab = ref<'extraction' | 'roleplay'>('extraction')
@@ -132,6 +138,21 @@ function openTypora() {
         :disabled="!hasExtraction || narrating || extracting"
         @click="emit('narrate')"
       >{{ narrating ? 'Narrating\u2026' : 'Narrate' }}</button>
+      <label class="prose-toggle" :title="'Strip mechanical language and GM framing from narration'">
+        <input type="checkbox" :checked="proseMode"
+          @change="emit('update:proseMode', ($event.target as HTMLInputElement).checked)" />
+        Prose
+      </label>
+      <label class="prose-toggle" :title="'Inject campaign history so the narrator can draw on past events as memories and reflections'">
+        <input type="checkbox" :checked="reflections"
+          @change="emit('update:reflections', ($event.target as HTMLInputElement).checked)" />
+        Memories
+      </label>
+      <label class="prose-toggle" :title="'Include corrected event list from enhanced_sections.md and campaign context files'">
+        <input type="checkbox" :checked="useEnhancedSections"
+          @change="emit('update:useEnhancedSections', ($event.target as HTMLInputElement).checked)" />
+        Enhanced
+      </label>
       <span class="save-flash" :class="{ show: saveFlash }">Saved</span>
       <span style="flex:1"></span>
       <button class="btn-neutral btn-sm" :disabled="!hasExtraction" @click="emit('open-typora', 'output')">
@@ -237,4 +258,14 @@ function openTypora() {
   transition: opacity .4s;
 }
 .save-flash.show { opacity: 1; }
+.prose-toggle {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 11px;
+  color: var(--text-muted);
+  cursor: pointer;
+  user-select: none;
+}
+.prose-toggle input { cursor: pointer; }
 </style>

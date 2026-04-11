@@ -111,6 +111,24 @@ Dialogue mandate: **"USE DIALOGUE IF PRESENT"** — if a scene had no spoken dia
 (wordless combat, environmental crossing), the model narrates from action beats and
 environment only. It does not invent dialogue.
 
+### Prose mode (`--prose-mode`)
+
+An optional rendering layer applied on top of either chunk or scene mode. When active,
+`PROSE_MODE_INSTRUCTION` is appended to the narration system prompt. It instructs the
+LLM to translate all game mechanics into narrative experience:
+
+- GM framing → character direct perception
+- NPC dialogue → heard, not relayed
+- Dice rolls / DCs / HP numbers → narrative consequence or felt condition
+- Game mechanic instructions ("Roll a DC-14 saving throw") → the moment of challenge
+- GM out-of-character banter → cut entirely
+- Turn-based language ("end of my turn") → rhythm of combat
+- Damage amounts → scale to endurance worn down, not wounds
+- Remaining HP statements → the character's felt condition and danger level
+
+Enable in the UI via the **Prose** checkbox in the toolbar, or pass `--prose-mode` on
+the CLI.
+
 ---
 
 ## Key Engineering Problems
@@ -183,6 +201,35 @@ Between narrators, the last sentence of the previous section is passed as a "han
 to the next narrator's prompt, so each voice picks up naturally from where the previous
 one left off — without knowing the full text of the previous section.
 
+### 6. VTT roleplay quote tracking
+
+The VTT transcript contains verbatim roleplay quotes that are higher fidelity than what
+survives Pass 4 extraction. These need to be matched to scenes so the narration can use
+the actual words, not a paraphrase.
+
+**Solution**: The Quote Ledger (`quote_ledger.py`) — a SQLite database that:
+
+1. Parses `extract_*.md` files from the roleplay extraction directory
+2. Matches quotes to scenes by chunk range: the source filename `extract_042.md` implies
+   chunk 42, which maps deterministically to the scene whose `chunk_start` ≤ 42 ≤ `chunk_end`
+3. Stores assignments; allows manual override (pinned quotes are never auto-reassigned)
+
+The auto-assign is fully deterministic — no LLM call. Earlier versions used Claude to match
+by content similarity, which produced temporal violations (quotes from chunk 42 landing in
+Scene 1). Chunk-range matching is exact.
+
+### 7. Speaker labels in extractions
+
+VTT speaker labels often include player names in parentheses: `Thorin (Joe)`, `GM (Kostadis)`.
+These bleed into extraction files and then into narration prose.
+
+**Solution**: `CHAR_EXTRACT_SYSTEM` includes a normalization instruction:
+- `GM (Name)` or `DM (Name)` → always written as `GM`
+- `Character (Player)` → player name stripped; character name only
+- Unnamed NPCs → kept as-is
+
+This applies to newly generated extractions. Existing files must be edited manually.
+
 ---
 
 ## Prompt Architecture
@@ -195,7 +242,21 @@ Each of the five passes uses a dedicated system prompt:
 | 2 | `ENHANCE_SYSTEM` | Expand Memorable Moments; preserve Scenes/NPCs; omit Summary |
 | 3 | `PLAN_SYSTEM` | Assign narrators to chunk/scene ranges; cover all; no redundancy |
 | 4 | `CHAR_EXTRACT_SYSTEM` | Extract this character's moments only: dialogue (both sides), action, environment |
-| 5 | `NARRATE_SYSTEM_BASE` | First-person prose; dialogue is the story; match style examples |
+| 5 | `NARRATE_SYSTEM_BASE` | First-person memoir (CRITICAL: no third person); scene skeleton from gmassistant injected before voice notes; prose-mode instruction appended if `--prose-mode` |
+
+**Pass 5 user-prompt order** (assembled by `build_narrate_prompt()`):
+1. Narrator + focus
+2. Character roster (`extract_character_roster()` from `party.md`)
+3. Party document
+4. **Scene: What Happened** — gmassistant scene text for this scene; the authoritative
+   event skeleton the LLM uses as structural spine
+5. Voice notes (from `voice/` directory)
+6. Roleplay summary (player's own character arc notes)
+7. Handoff (last sentence of previous narrator)
+8. Narrator's extracted moments (Pass 4 output)
+
+The gmassistant section is only injected in `--by-scene` mode when a matching scene name
+exists in the gmassistant document. Non-scene (chunk) narrations are unaffected.
 
 All API calls use `stream_api()` from `campaignlib.py`, which streams output to the
 terminal. Pass 1 and all Pass 4 calls run silently (`silent=True`).
@@ -279,9 +340,21 @@ Pass multiple scene numbers to re-run several at once: `--scene 3 7`.
 
 ## Session Doc UI
 
-`session_doc_ui.py` is a Flask-based browser editor for the extract → edit → narrate
-workflow. It wraps the iterative workflow above in a three-panel UI so you don't have
-to edit raw markdown files and re-run the CLI manually.
+The UI is a FastAPI + Vue 3 browser editor for the extract → edit → narrate workflow.
+The server lives in `~/CampaignGenerator/server/`; the frontend is in `frontend/`.
+
+### Starting the UI
+
+From the campaign workspace directory:
+
+```bash
+./start      # starts the FastAPI server (background, logs to server.log)
+./stop       # stops it
+# Then open http://localhost:5000
+```
+
+Config is read from `ui_config.yaml` in the campaign directory. The UI can also update
+config at runtime via the Settings panel (PUT `/api/scene-editor/config`).
 
 ### Layout
 
@@ -289,82 +362,60 @@ to edit raw markdown files and re-run the CLI manually.
 ┌──────────────┬────────────────────────────────┬─────────────────────┐
 │ Scene list   │ Extraction editor              │ VTT roleplay source │
 │              │                                │                     │
-│ 01 Vukradin  │ [editable textarea]            │ extract_001.md      │
-│ 02 Soma      │                                │ extract_002.md      │
-│ 03 Valphine  │ [Save] [Edit in Typora]        │                     │
-│ ...          │ [Reload]                       │                     │
+│ 01 Vukradin  │ Tab: Extraction | Roleplay Ctx │ extract_001.md      │
+│ 02 Soma      │ [editable textarea]            │ extract_002.md      │
+│ 03 Valphine  │                                │                     │
+│ ...          │ [Save] [Edit in Typora]        │                     │
+│              │ [Reload] [Narrate] [☐ Prose]   │                     │
+│ token counts │                                │                     │
+│ ⚠ if over    │ [Open narration in Typora]     │                     │
 │              │                                │                     │
-│ token counts │ [Narrate]                      │                     │
-│ ⚠ if over    │ [streaming narration output]   │                     │
-│              │                                │                     │
-│              │ [Open narration in Typora]     │                     │
+│  ──────────  │  Quote Ledger panel            │                     │
+│  Quote       │  [Sync] [Auto-assign]          │                     │
+│  Ledger      │  Quote list per scene          │                     │
 └──────────────┴────────────────────────────────┴─────────────────────┘
 ```
 
-### Starting the UI
-
-From the campaign workspace directory:
-
-```bash
-# Via wrapper script (recommended — reads ui_config.yaml automatically)
-./ui.sh
-
-# Or directly
-python ~/CampaignGenerator/session_doc_ui.py session-recap \
-    --extract-dir scene_extractions/ \
-    --roleplay-extract-dir vtt_roleplay_extractions/ \
-    --output-dir . \
-    --party partyfile.md \
-    --voice-dir voice/ \
-    --narrate-tokens 4000
-
-# Then open http://localhost:5000
-```
-
-Can also be launched from the Streamlit app (`app.py`) → Session Doc Editor → Launch Server.
-
 ### Workflow in the UI
 
-1. Run phase 1 (extract-only) from the CLI first to populate `scene_extractions/`
+1. Run phase 1 (extract-only) from the CLI to populate `scene_extractions/`
 2. Open `http://localhost:5000`
-3. Click a scene in the left panel — extraction loads in the editor
-4. Edit directly in the browser, or click **Edit in Typora** to open in Typora on Windows
-5. After editing in Typora, click **Reload** to pull changes back into the browser
-6. Click **Save** to write changes to disk
-7. Click **Narrate** — streams the narration output live in the centre panel
-   (calls `session_doc.py --from-extractions --scene N` under the hood)
-8. Click **Open narration in Typora** to review the saved output file
+3. Click a scene — extraction loads in the editor
+4. Edit in-browser, or click **Edit in Typora** to open on Windows
+5. After Typora edits, **Reload** to pull changes back
+6. **Save** to write to disk
+7. **Narrate** — streams narration live (calls `session_doc.py --from-extractions --scene N`)
+8. Toggle **Prose** checkbox to enable/disable prose mode for the next narration
+9. **Open narration in Typora** to review the saved output
+
+### Quote Ledger
+
+The Quote Ledger tab tracks verbatim VTT roleplay quotes and their scene assignments.
+
+- **Sync** — scans the roleplay extraction directory, parses all quotes, fuzzy-matches
+  against scene dialogue lines, stores in `quote_ledger.db`
+- **Auto-assign** — assigns remaining unmatched quotes to scenes by chunk range
+  (deterministic; no LLM call)
+- **Manual assign** — use the assignment panel to move quotes between scenes
+- **Generate extraction** — calls Claude to produce a scene extraction file from the
+  assigned quotes + the gmassistant recap for that scene
 
 ### Token estimates
 
-The scene list shows a token estimate for each extraction file. If the estimate
-exceeds `--narrate-tokens`, a warning is shown next to the scene name.
+The scene list shows a token estimate for each extraction file. If over `narrate_tokens`,
+a warning appears next to the scene name.
 
-To override the estimate for a specific scene, add a `tokens:` line at the top of
-the extraction file:
+Override for a specific scene by adding a `tokens:` line at the top of the file:
 
 ```
 tokens: 6000
 ```
 
-### `ui_config.yaml` keys
-
-```yaml
-session_doc_session:              /path/to/session-recap
-session_doc_extract_dir:          /path/to/scene_extractions
-session_doc_roleplay_extract_dir: /path/to/vtt_roleplay_extractions
-session_doc_summary_extract_dir:  /path/to/vtt_extractions
-session_doc_output_dir:           /path/to/output
-session_doc_voice_dir:            /path/to/voice
-session_doc_narrate_tokens:       4000
-session_doc_port:                 5000
-```
-
 ### WSL / Typora
 
-The UI runs in WSL but opens files in Typora on Windows. It uses `wslpath -w` to
-convert paths and `powershell.exe -c Start-Process "path"` to launch Typora, which
-handles UNC paths correctly (explorer.exe and cmd.exe do not).
+The UI runs in WSL but opens files in Typora on Windows. It uses `wslpath -w` to convert
+paths and `powershell.exe -c Start-Process "path"` to launch Typora, which handles UNC
+paths correctly (explorer.exe and cmd.exe do not).
 
 ---
 
@@ -396,6 +447,7 @@ python session_doc.py session-recap \
 | `--from-extractions DIR` | Skip passes 1–4; narrate from saved (possibly edited) extractions |
 | `--scene N [M …]` | Re-run only the specified scene number(s) |
 | `--plan-file FILE` | Supply a hand-written plan; skip pass 3 |
+| `--prose-mode` | Strip all mechanical/game language and GM framing from narration |
 | `--narrator NAME` | Single character only; skips passes 1–2 |
 | `--dry-run` | Print pass-4 prompts without calling the API |
 | `--verbose` | Print all prompts before each API call |
@@ -407,5 +459,11 @@ python session_doc.py session-recap \
 ## Source
 
 All pipeline logic lives in `session_doc.py`. Shared utilities (API calls, logging,
-config loading, file I/O) are in `campaignlib.py`. The Flask UI is `session_doc_ui.py`.
+config loading, file I/O) are in `campaignlib.py`.
+
+The browser UI is a FastAPI server (`server/`) with a Vue 3 frontend (`frontend/`).
+The quote ledger is `quote_ledger.py` with API routes in `server/routers/ledger.py`.
 All scripts live in `~/CampaignGenerator/`.
+
+See `GMASSISTANT_PIPELINE.md` for a non-technical explanation of the pipeline and
+gmassistant's role as the authoritative event skeleton.

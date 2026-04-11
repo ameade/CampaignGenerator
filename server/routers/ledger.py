@@ -34,8 +34,8 @@ def _get_ledger() -> QuoteLedger:
     global _LEDGER
     cfg = _config()
     db_path = Path(cfg["extract_dir"]) / "quote_ledger.db"
-    # Re-create if extract_dir changed (different session)
-    if _LEDGER is not None and _LEDGER.db_path != db_path:
+    # Re-create if extract_dir changed or the db file was deleted under us
+    if _LEDGER is not None and (_LEDGER.db_path != db_path or not db_path.exists()):
         _LEDGER.close()
         _LEDGER = None
     if _LEDGER is None:
@@ -140,30 +140,13 @@ def api_all_quotes():
     return {"quotes": _LEDGER.get_all_quotes()}
 
 
-# ── Auto-assign (Claude SSE) ─────────────────────────────────────────────
-
-AUTO_ASSIGN_SYSTEM = """\
-You assign verbatim VTT quotes to narrative scenes.
-
-Given a list of scenes (with narrator, name, focus, and chunk range) and a list
-of unassigned quotes (with id, speaker, character, context, and text), assign
-each quote to the single most appropriate scene based on:
-- The quote's context and content
-- The scene's focus and chunk range
-- Character alignment (the scene's narrator or other characters present)
-
-Output ONLY a JSON array of objects: [{"quote_id": <int>, "scene_index": <int>}, ...]
-Include only quotes you can confidently assign. Omit quotes that don't clearly
-fit any scene. Do not wrap in markdown code blocks.
-"""
-
+# ── Auto-assign (deterministic by chunk range) ───────────────────────────
 
 async def _stream_auto_assign() -> AsyncGenerator[str, None]:
-    """Call Claude to assign unassigned quotes to scenes, stream progress."""
-    import asyncio
-
+    """Assign unassigned quotes to scenes by chunk range (deterministic)."""
     ledger = _get_ledger()
     scenes = _load_scenes()
+
     all_quotes = ledger.get_all_quotes()
     unassigned = [q for q in all_quotes if q["scene_index"] is None]
 
@@ -173,86 +156,22 @@ async def _stream_auto_assign() -> AsyncGenerator[str, None]:
         return
 
     if not scenes:
-        yield _sse_event("No scenes found. Run scene extraction first.\n")
+        yield _sse_event("No scenes found. Run extraction first.\n")
         yield _sse_done(1)
         return
 
-    yield _sse_event(f"Assigning {len(unassigned)} quotes to {len(scenes)} scenes...\n")
-
-    # Build prompt
-    scene_lines = []
-    for s in scenes:
-        scene_lines.append(
-            f"Scene {s['index']}: narrator={s['narrator']}, "
-            f"name=\"{s.get('scene', '')}\", focus=\"{s.get('focus', '')}\", "
-            f"chunks={s['chunk_start']}-{s['chunk_end']}"
-        )
-
-    quote_lines = []
-    for q in unassigned:
-        text_preview = q["quote_text"][:200]
-        quote_lines.append(
-            f"[id={q['id']}] {q['character']} ({q['context']}): \"{text_preview}\""
-        )
-
-    user_prompt = (
-        "## Scenes\n" + "\n".join(scene_lines) +
-        "\n\n## Quotes to Assign\n" + "\n".join(quote_lines)
+    yield _sse_event(
+        f"Assigning {len(unassigned)} quotes across {len(scenes)} scenes "
+        f"by chunk range...\n"
     )
-
-    yield _sse_event("Calling Claude for assignment...\n")
-
-    # Call Claude API (sync, in thread to not block event loop)
-    try:
-        from campaignlib import make_client, call_api
-        client = make_client()
-        model = _config().get("model", "claude-sonnet-4-6")
-
-        response = await asyncio.to_thread(
-            call_api, client, AUTO_ASSIGN_SYSTEM, user_prompt, model, 8192
+    result = ledger.chunk_assign(scenes)
+    yield _sse_event(f"Assigned {result['assigned']} quotes.\n")
+    if result["skipped"]:
+        yield _sse_event(
+            f"{result['skipped']} quotes skipped "
+            f"(chunk not in any scene range).\n"
         )
-
-        yield _sse_event("Parsing response...\n")
-
-        # Parse JSON response
-        # Strip any markdown code fences if present
-        text = response.strip()
-        if text.startswith("```"):
-            text = text.split("\n", 1)[1] if "\n" in text else text[3:]
-        if text.endswith("```"):
-            text = text[:-3]
-        text = text.strip()
-
-        assignments = json.loads(text)
-        if not isinstance(assignments, list):
-            yield _sse_event(f"Unexpected response format: {type(assignments)}\n")
-            yield _sse_done(1)
-            return
-
-        # Group by scene and bulk assign
-        from collections import defaultdict
-        by_scene: dict[int, list[int]] = defaultdict(list)
-        for a in assignments:
-            by_scene[a["scene_index"]].append(a["quote_id"])
-
-        total = 0
-        for scene_idx, quote_ids in by_scene.items():
-            count = ledger.bulk_assign(quote_ids, scene_idx)
-            total += count
-            scene = next((s for s in scenes if s["index"] == scene_idx), None)
-            label = f"Scene {scene_idx}"
-            if scene:
-                label += f": {scene['narrator']}"
-                if scene.get("scene"):
-                    label += f" — {scene['scene']}"
-            yield _sse_event(f"  {label}: {count} quotes assigned\n")
-
-        yield _sse_event(f"\nDone — {total} quotes assigned to {len(by_scene)} scenes.\n")
-        yield _sse_done(0)
-
-    except Exception as e:
-        yield _sse_event(f"Error: {e}\n")
-        yield _sse_done(1)
+    yield _sse_done(0)
 
 
 @router.get("/auto-assign")
@@ -267,29 +186,53 @@ async def api_auto_assign():
 # ── Generate extraction (Claude SSE) ─────────────────────────────────────
 
 GENERATE_EXTRACTION_SYSTEM = """\
-You are extracting character moments for a D&D session narrative.
+You are assembling a scene extraction file for a D&D session narrative.
 
-Given:
+You are given:
 - A scene's narrator, name, and focus
-- Verbatim VTT quotes assigned to this scene
-- The GM's recap text covering this scene
+- Verbatim VTT quotes assigned to this scene (the ONLY permitted source of dialogue)
+- (Optional) GM recap bullet points for this scene (the ONLY permitted source of action beats)
 
-Produce a scene extraction file with:
+Produce the extraction as grouped moments in chronological order.
 
-1. Dialogue exchanges — use the verbatim quotes provided, attributed correctly
-   Format: Speaker: "exact quote text"
-2. Action beats — what the characters did physically (from the recap)
-3. Environmental moments — setting, atmosphere (from the recap)
+Each moment is:
+- An action beat on its own line starting with "-" (copied verbatim from the recap)
+- Followed immediately (no indentation) by any quotes that occurred during that beat:
+  Speaker: "exact quote text"
+- Followed by a blank line before the next moment
 
-Format each moment as:
-**[brief scene label]**
-[dialogue lines]
-[action/environment description]
-[one sentence: what this moment felt like or cost]
+Place each assigned quote under the beat it most naturally belongs to — the beat that
+was happening when the character said it. Keep quotes in their original order relative
+to each other. Beats with no associated quotes appear alone. If quotes clearly precede
+all action beats, list them first with no preceding beat line.
 
-Keep everything in chronological order.
-IMPORTANT: Use ONLY the provided quotes for dialogue. Do not invent dialogue.
-Output only the extracted moments. No preamble, no commentary.
+IMPORTANT: Use ONLY the assigned quotes for dialogue. Do not invent dialogue or use
+any dialogue from the recap text. Do not reorder quotes relative to each other.
+Do not add labels, headers, emotional closing lines, or any prose of your own.
+
+SPEAKER LABEL NORMALISATION — apply to every dialogue line:
+- GM or DM with any player name in parentheses (e.g. "GM (Gabe)", "DM (Gabe)") → write as "GM"
+- Character names with a player name in parentheses (e.g. "Thorin (Joe)") → strip parenthetical, write only the character name
+- Unnamed NPCs → keep as-is
+
+OOC TABLE-TALK — omit these quotes entirely:
+- Damage/roll announcements: "16 more damage", "nat 20", "crit for 10 plus 6"
+- Player mechanic explanations: "I action surge", "I cast X at Y level"
+- GM mechanical rulings (not NPC speech): "You take 18", "roll perception"
+- Out-of-character reactions and cross-talk
+
+The test: does the line contain mechanical game language (damage numbers, conditions, spell
+names as mechanics)? If yes — cut it, regardless of speaker label.
+"""
+
+GENERATE_EXTRACTION_PROSE_ADDENDUM = """\
+
+PROSE MODE: For action beat lines only, translate mechanical language into plain narrative
+description — no damage numbers, HP values, spell slot counts, or die results.
+- Damage amounts → the weight of the hit (glancing / real impact / serious / brutal)
+- Spell slots → the effort or resource the character draws on
+- Saving throws → whether the character held, struggled, or was overcome
+Dialogue lines are always kept verbatim. Do not alter quoted text.
 """
 
 
@@ -308,14 +251,9 @@ async def _stream_generate_extraction(scene_num: int) -> AsyncGenerator[str, Non
     scene = scenes[scene_num - 1]
     quotes = ledger.get_scene_quotes(scene_num)
 
-    if not quotes:
-        yield _sse_event(f"No quotes assigned to Scene {scene_num}. Assign quotes first.\n")
-        yield _sse_done(1)
-        return
-
     yield _sse_event(f"Generating extraction for Scene {scene_num}: "
                      f"{scene['narrator']} — {scene.get('scene', '')} "
-                     f"({len(quotes)} quotes)...\n")
+                     f"({len(quotes)} quote(s))...\n")
 
     # Build quote text
     quote_block = []
@@ -324,30 +262,29 @@ async def _stream_generate_extraction(scene_num: int) -> AsyncGenerator[str, Non
         if q.get("context"):
             quote_block.append(f"  [{q['context']}]")
 
-    # Load recap text for this scene's chunk range
+    # Load recap text for this scene
     recap_text = ""
     session_path = _config().get("session")
     if session_path and Path(session_path).exists():
         full_recap = Path(session_path).read_text(encoding="utf-8")
-        # Try to extract the relevant scene section from the recap
-        from session_doc import extract_section_text
+        from session_doc import extract_scene_text
         scene_name = scene.get("scene", "")
         if scene_name:
-            recap_text = extract_section_text(full_recap, scene_name)
-        if not recap_text:
-            # Fall back to Summary + Memorable Moments
-            recap_text = extract_section_text(full_recap, "Summary")
-            mm = extract_section_text(full_recap, "Memorable Moments")
-            if mm:
-                recap_text += "\n\n## Memorable Moments\n" + mm
+            recap_text = extract_scene_text(full_recap, scene_name)
+
+    if not recap_text and not quote_block:
+        yield _sse_event("No quotes assigned and no recap found for this scene — nothing to generate.\n")
+        yield _sse_done(1)
+        return
 
     user_prompt = (
         f"## Scene {scene_num}\n"
         f"Narrator: {scene['narrator']}\n"
         f"Scene: {scene.get('scene', 'N/A')}\n"
-        f"Focus: {scene.get('focus', 'N/A')}\n\n"
-        f"## Assigned Quotes\n" + "\n".join(quote_block)
+        f"Focus: {scene.get('focus', 'N/A')}\n"
     )
+    if quote_block:
+        user_prompt += f"\n## Assigned Quotes\n" + "\n".join(quote_block)
     if recap_text:
         user_prompt += f"\n\n## GM Recap Context\n{recap_text}"
 
@@ -359,12 +296,16 @@ async def _stream_generate_extraction(scene_num: int) -> AsyncGenerator[str, Non
         model = _config().get("model", "claude-sonnet-4-6")
 
         # Stream the response
+        extract_system = GENERATE_EXTRACTION_SYSTEM
+        if _config().get("prose_mode"):
+            extract_system += GENERATE_EXTRACTION_PROSE_ADDENDUM
+
         chunks: list[str] = []
         response_gen = await asyncio.to_thread(
             lambda: client.messages.stream(
                 model=model,
                 max_tokens=8192,
-                system=GENERATE_EXTRACTION_SYSTEM,
+                system=extract_system,
                 messages=[{"role": "user", "content": user_prompt}],
             )
         )

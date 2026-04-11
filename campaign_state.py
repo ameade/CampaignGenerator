@@ -61,7 +61,7 @@ import argparse
 import sys
 from pathlib import Path
 
-from campaignlib import make_client, stream_api
+from campaignlib import prepare_chunks, make_client, stream_api
 
 EXTRACT_SYSTEM_BASE = """\
 You are extracting campaign completion and status information from D&D session summary notes.
@@ -193,32 +193,13 @@ def build_synthesize_system(tracked_items: list[str]) -> str:
     return SYNTHESIZE_SYSTEM_BASE.format(tracked_section=tracked_section)
 
 
-def chunk_text(text: str, chunk_size: int) -> list[str]:
-    chunks = []
-    start = 0
-    while start < len(text):
-        end = start + chunk_size
-        if end >= len(text):
-            chunks.append(text[start:])
-            break
-        boundary = text.rfind("\n\n", start, end)
-        if boundary == -1 or boundary <= start:
-            boundary = text.rfind("\n", start, end)
-        if boundary == -1 or boundary <= start:
-            boundary = end
-        chunks.append(text[start:boundary])
-        start = boundary
-    return [c.strip() for c in chunks if c.strip()]
-
 
 def run_extract(
     client, text: str, chunk_size: int, model: str, extract_dir: Path,
-    tracked_items: list[str],
+    tracked_items: list[str], split_chapters: str | None = None,
 ) -> list[Path]:
-    chunks = chunk_text(text, chunk_size)
+    chunks, label = prepare_chunks(text, chunk_size, split_chapters, split_label="session")
     total = len(chunks)
-    print(f"  {total} chunk(s) to process (chunk size: {chunk_size:,} chars)\n")
-
     extract_dir.mkdir(parents=True, exist_ok=True)
     system = build_extract_system(tracked_items)
     saved = []
@@ -230,7 +211,7 @@ def run_extract(
             saved.append(out_file)
             continue
 
-        print(f"  [{i}/{total}] Extracting chunk ({len(chunk):,} chars)...")
+        print(f"  [{i}/{total}] Extracting {label} ({len(chunk):,} chars)...")
         print("  " + "─" * 56)
         result = stream_api(client, system, chunk, model)
         print("  " + "─" * 56)
@@ -276,6 +257,9 @@ def main() -> None:
                              "(alternative to --track-file)")
     parser.add_argument("--chunk-size", type=int, default=60000, metavar="CHARS",
                         help="Max characters per extract chunk (default: 60000)")
+    parser.add_argument("--split-chapters", metavar="PREFIX", default=None,
+                        help="Split input at lines beginning with PREFIX instead of by character "
+                             "count (e.g. '# Session'). Each session becomes one extract chunk.")
     parser.add_argument("--extract-dir", metavar="DIR", default=None,
                         help="Where to save/load intermediate extractions "
                              "(default: <output_dir>/state_extractions/)")
@@ -326,7 +310,7 @@ def main() -> None:
         print(f"\n[Pass 1: Extract campaign state | {len(text):,} chars | model: {args.model}]")
         print("=" * 60)
         extract_files = run_extract(client, text, args.chunk_size, args.model, extract_dir,
-                                    tracked_items)
+                                    tracked_items, split_chapters=args.split_chapters)
         if not extract_files:
             print("Error: no chunks were extracted — input may be too short.", file=sys.stderr)
             sys.exit(1)

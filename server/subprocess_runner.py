@@ -19,6 +19,9 @@ async def stream_subprocess(
     """
     env = {**os.environ, "PYTHONUNBUFFERED": "1"}
 
+    cmd_display = " \\\n  ".join(cmd)
+    yield f"data: {json.dumps(f'$ {cmd_display}\\n\\n')}\n\n"
+
     proc = await asyncio.create_subprocess_exec(
         *cmd,
         stdout=asyncio.subprocess.PIPE,
