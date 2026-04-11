@@ -241,6 +241,16 @@ def api_get_output(n: int):
     return {"exists": True}
 
 
+@router.get("/enhanced-sections")
+def api_get_enhanced_sections():
+    if not CONFIG.get("extract_dir"):
+        return {"exists": False, "content": ""}
+    path = Path(CONFIG["extract_dir"]) / "enhanced_sections.md"
+    if not path.exists():
+        return {"exists": False, "content": ""}
+    return {"exists": True, "content": path.read_text(encoding="utf-8")}
+
+
 @router.get("/vtt")
 def api_vtt():
     if not CONFIG.get("roleplay_extract_dir"):

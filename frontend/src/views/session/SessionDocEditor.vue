@@ -93,9 +93,16 @@ async function applyConfig() {
     configured.value = true
     await loadScenes()
     await checkAssembled()
+    await loadEnhancedSections()
   } catch (e: any) {
     configError.value = `Failed to configure editor: ${e.message}`
   }
+}
+
+async function loadEnhancedSections() {
+  const data = await apiFetch('/api/editor/enhanced-sections')
+  enhancedContent.value = data.content || ''
+  hasEnhanced.value = data.exists || false
 }
 
 // ── Mode toggle ──────────────────────────────────────────────────
@@ -115,6 +122,8 @@ const extracting = ref(false)
 const narrationOutput = ref('')
 const statusMsg = ref('')
 const rightTab = ref<'vtt' | 'ledger'>('vtt')
+const enhancedContent = ref('')
+const hasEnhanced = ref(false)
 const assembledExists = ref(false)
 
 const activeSSE = ref<EventSource | null>(null)
@@ -585,6 +594,8 @@ onMounted(async () => {
           <ExtractionEditor
             :extraction-content="extractionContent"
             :roleplay-content="roleplayContent"
+            :enhanced-content="enhancedContent"
+            :has-enhanced="hasEnhanced"
             :scene-label="sceneLabel"
             :estimated-tokens="estimatedTokens"
             :default-narrate-tokens="narrateTokens"
@@ -605,6 +616,7 @@ onMounted(async () => {
             @update:prose-mode="proseMode = $event; apiPut('/api/editor/config', { prose_mode: $event || undefined })"
             @update:reflections="reflections = $event; apiPut('/api/editor/config', { reflections: $event || undefined })"
             @update:use-enhanced-sections="useEnhancedSections = $event"
+            @load-enhanced="loadEnhancedSections"
           />
           <NarrationOutput
             :output="narrationOutput"

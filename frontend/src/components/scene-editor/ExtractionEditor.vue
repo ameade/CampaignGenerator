@@ -4,10 +4,12 @@ import { ref, computed } from 'vue'
 const props = defineProps<{
   extractionContent: string
   roleplayContent: string
+  enhancedContent: string
   sceneLabel: string
   estimatedTokens: number | null
   defaultNarrateTokens: number
   hasExtraction: boolean
+  hasEnhanced: boolean
   isRoleplayLocal: boolean
   narrating: boolean
   extracting: boolean
@@ -27,9 +29,10 @@ const emit = defineEmits<{
   'update:proseMode': [value: boolean]
   'update:reflections': [value: boolean]
   'update:useEnhancedSections': [value: boolean]
+  'load-enhanced': []
 }>()
 
-const activeTab = ref<'extraction' | 'roleplay'>('extraction')
+const activeTab = ref<'extraction' | 'roleplay' | 'enhanced'>('extraction')
 const saveFlash = ref(false)
 
 // Token estimate
@@ -61,7 +64,7 @@ function flash() {
 function save() {
   if (activeTab.value === 'roleplay') {
     emit('save-roleplay', props.roleplayContent)
-  } else {
+  } else if (activeTab.value === 'extraction') {
     emit('save-extraction', props.extractionContent)
   }
   flash()
@@ -103,6 +106,14 @@ function openTypora() {
         Roleplay Context
         <span v-if="isRoleplayLocal" class="tab-badge">edited</span>
       </div>
+      <div
+        class="tab"
+        :class="{ active: activeTab === 'enhanced' }"
+        @click="activeTab = 'enhanced'; emit('load-enhanced')"
+      >
+        Session Notes
+        <span v-if="hasEnhanced" class="tab-badge">ready</span>
+      </div>
     </div>
 
     <!-- Extraction pane -->
@@ -128,10 +139,21 @@ function openTypora() {
       />
     </div>
 
+    <!-- Enhanced / Session Notes pane (read-only) -->
+    <div class="editor-pane" :class="{ hidden: activeTab !== 'enhanced' }">
+      <textarea
+        class="editor-ta"
+        :value="enhancedContent"
+        readonly
+        placeholder="No enhanced_sections.md found. Run Scene Extraction first."
+        spellcheck="false"
+      />
+    </div>
+
     <!-- Toolbar -->
     <div class="toolbar">
-      <button class="btn-primary" :disabled="!hasExtraction" @click="save">Save</button>
-      <button class="btn-neutral" :disabled="!hasExtraction" @click="openTypora">Edit in Typora</button>
+      <button class="btn-primary" :disabled="!hasExtraction || activeTab === 'enhanced'" @click="save">Save</button>
+      <button class="btn-neutral" :disabled="!hasExtraction || activeTab === 'enhanced'" @click="openTypora">Edit in Typora</button>
       <button class="btn-neutral" :disabled="!hasExtraction" @click="emit('reload')">Reload</button>
       <button
         class="btn-success"
@@ -148,7 +170,7 @@ function openTypora() {
           @change="emit('update:reflections', ($event.target as HTMLInputElement).checked)" />
         Memories
       </label>
-      <label class="prose-toggle" :title="'Include corrected event list from enhanced_sections.md and campaign context files'">
+      <label class="prose-toggle" :title="'Pass enhanced_sections.md to the narration as scene context'">
         <input type="checkbox" :checked="useEnhancedSections"
           @change="emit('update:useEnhancedSections', ($event.target as HTMLInputElement).checked)" />
         Enhanced
