@@ -117,6 +117,7 @@ def derive_campaign_paths(campaign_dir: str, session_dir: str) -> dict:
         ("campaign_state.md", "campaign_state"),
         ("world_state.md", "world_state"),
         ("party.md", "party"),
+        ("planning.md", "planning"),
     ]:
         p = docs / name
         result[key] = str(p) if p.exists() else ""

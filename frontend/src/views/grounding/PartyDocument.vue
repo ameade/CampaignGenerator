@@ -27,7 +27,7 @@ function loadFromConfig() {
   backstory.value = v.party_backstory || ''
   arcScores.value = v.party_arc_scores || ''
   context.value = v.party_context || ''
-  output.value = v.party_output || ''
+  output.value = v.party_output || v.party || ''
   extractDir.value = v.party_extract_dir || ''
   chunkSize.value = v.party_chunk_size || 60000
   splitChapters.value = v.party_split_chapters || ''

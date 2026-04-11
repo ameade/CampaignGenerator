@@ -36,7 +36,7 @@ function loadFromConfig() {
   arcScores.value = v.plan_arc_scores || ''
   summaries.value = v.plan_summaries || v.summaries || ''
   context.value = v.plan_context || ''
-  output.value = v.plan_output || v.planning_output || ''
+  output.value = v.plan_output || v.planning_output || v.planning || ''
   extractDir.value = v.plan_extract_dir || ''
   chunkSize.value = v.plan_chunk_size || 60000
   splitChapters.value = v.plan_split_chapters || ''
