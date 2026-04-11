@@ -5,3 +5,4 @@ pyvis
 fastapi
 uvicorn
 requests
+mcp
