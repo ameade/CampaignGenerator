@@ -29,7 +29,7 @@ import sys
 from datetime import date
 from pathlib import Path
 
-from campaignlib import make_client, stream_api, save_log
+from campaignlib import chunk_text, make_client, save_log, stream_api
 
 
 EXTRACT_SYSTEM_BASE = """\
@@ -223,22 +223,6 @@ def parse_vtt(text: str) -> str:
     return "\n".join(dialogue)
 
 
-def chunk_text(text: str, chunk_size: int) -> list[str]:
-    """Split text into chunks at newline boundaries near chunk_size chars."""
-    chunks = []
-    start = 0
-    while start < len(text):
-        end = start + chunk_size
-        if end >= len(text):
-            chunks.append(text[start:])
-            break
-        # Try to break at a newline
-        boundary = text.rfind("\n", start, end)
-        if boundary <= start:
-            boundary = end
-        chunks.append(text[start:boundary])
-        start = boundary
-    return [c.strip() for c in chunks if c.strip()]
 
 
 def build_context_section(context_text: str) -> str:

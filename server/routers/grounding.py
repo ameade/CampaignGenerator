@@ -46,6 +46,7 @@ async def run_campaign_state(
     track: list[str] = Query(default=[]),
     extract_dir: str = "",
     chunk_size: int = 60000,
+    split_chapters: str = "",
     synthesize_only: bool = False,
     no_log: bool = False,
     model: str = "claude-sonnet-4-6",
@@ -60,7 +61,9 @@ async def run_campaign_state(
     _cmd_multi(cmd, "--track", track)
     _cmd_opt(cmd, "--extract-dir", extract_dir)
 
-    if chunk_size and chunk_size != 60000:
+    if split_chapters:
+        cmd += ["--split-chapters", split_chapters]
+    elif chunk_size and chunk_size != 60000:
         cmd += ["--chunk-size", str(chunk_size)]
 
     _cmd_flag(cmd, "--synthesize-only", synthesize_only)
@@ -78,6 +81,7 @@ async def run_distill(
     output: str = "",
     extract_dir: str = "",
     chunk_size: int = 60000,
+    split_chapters: str = "",
     synthesize_only: bool = False,
     no_log: bool = False,
     model: str = "claude-sonnet-4-6",
@@ -90,7 +94,9 @@ async def run_distill(
     _cmd_opt(cmd, "--output", output)
     _cmd_opt(cmd, "--extract-dir", extract_dir)
 
-    if chunk_size and chunk_size != 60000:
+    if split_chapters:
+        cmd += ["--split-chapters", split_chapters]
+    elif chunk_size and chunk_size != 60000:
         cmd += ["--chunk-size", str(chunk_size)]
 
     _cmd_flag(cmd, "--synthesize-only", synthesize_only)
@@ -112,6 +118,7 @@ async def run_party(
     output: str = "",
     extract_dir: str = "",
     chunk_size: int = 60000,
+    split_chapters: str = "",
     synthesize_only: bool = False,
     no_log: bool = False,
     model: str = "claude-sonnet-4-6",
@@ -126,7 +133,9 @@ async def run_party(
     _cmd_opt(cmd, "--output", output)
     _cmd_opt(cmd, "--extract-dir", extract_dir)
 
-    if chunk_size and chunk_size != 60000:
+    if split_chapters:
+        cmd += ["--split-chapters", split_chapters]
+    elif chunk_size and chunk_size != 60000:
         cmd += ["--chunk-size", str(chunk_size)]
 
     _cmd_flag(cmd, "--synthesize-only", synthesize_only)
@@ -147,6 +156,7 @@ async def run_planning(
     output: str = "",
     extract_dir: str = "",
     chunk_size: int = 60000,
+    split_chapters: str = "",
     synthesize_only: bool = False,
     no_log: bool = False,
     model: str = "claude-sonnet-4-6",
@@ -160,7 +170,9 @@ async def run_planning(
     _cmd_opt(cmd, "--output", output)
     _cmd_opt(cmd, "--extract-dir", extract_dir)
 
-    if chunk_size and chunk_size != 60000:
+    if split_chapters:
+        cmd += ["--split-chapters", split_chapters]
+    elif chunk_size and chunk_size != 60000:
         cmd += ["--chunk-size", str(chunk_size)]
 
     _cmd_flag(cmd, "--synthesize-only", synthesize_only)
@@ -176,6 +188,7 @@ async def run_build_dossiers(
     dossier_dir: str = "",
     extract_dir: str = "",
     chunk_size: int = 60000,
+    split_chapters: str = "",
     no_log: bool = False,
     model: str = "claude-sonnet-4-6",
 ):
@@ -186,7 +199,9 @@ async def run_build_dossiers(
     _cmd_opt(cmd, "--dossier-dir", dossier_dir)
     _cmd_opt(cmd, "--extract-dir", extract_dir)
 
-    if chunk_size and chunk_size != 60000:
+    if split_chapters:
+        cmd += ["--split-chapters", split_chapters]
+    elif chunk_size and chunk_size != 60000:
         cmd += ["--chunk-size", str(chunk_size)]
 
     _cmd_flag(cmd, "--no-log", no_log)

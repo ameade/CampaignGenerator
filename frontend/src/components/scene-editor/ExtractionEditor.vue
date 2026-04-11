@@ -13,6 +13,7 @@ const props = defineProps<{
   extracting: boolean
   proseMode: boolean
   reflections: boolean
+  useEnhancedSections: boolean
 }>()
 
 const emit = defineEmits<{
@@ -25,6 +26,7 @@ const emit = defineEmits<{
   'update:roleplayContent': [content: string]
   'update:proseMode': [value: boolean]
   'update:reflections': [value: boolean]
+  'update:useEnhancedSections': [value: boolean]
 }>()
 
 const activeTab = ref<'extraction' | 'roleplay'>('extraction')
@@ -145,6 +147,11 @@ function openTypora() {
         <input type="checkbox" :checked="reflections"
           @change="emit('update:reflections', ($event.target as HTMLInputElement).checked)" />
         Memories
+      </label>
+      <label class="prose-toggle" :title="'Include corrected event list from enhanced_sections.md and campaign context files'">
+        <input type="checkbox" :checked="useEnhancedSections"
+          @change="emit('update:useEnhancedSections', ($event.target as HTMLInputElement).checked)" />
+        Enhanced
       </label>
       <span class="save-flash" :class="{ show: saveFlash }">Saved</span>
       <span style="flex:1"></span>

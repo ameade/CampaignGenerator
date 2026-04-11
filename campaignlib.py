@@ -4,11 +4,59 @@ All file I/O, API calls, clipboard, and logging live here so individual
 scripts only contain their own logic.
 """
 
+import re
 import sys
 from datetime import datetime
 from pathlib import Path
 
 DEFAULT_MODEL = "claude-sonnet-4-20250514"
+
+
+# ── Text chunking ─────────────────────────────────────────────────────────────
+
+def chunk_text(text: str, chunk_size: int) -> list[str]:
+    """Split text into chunks at paragraph boundaries near chunk_size chars."""
+    chunks = []
+    start = 0
+    while start < len(text):
+        end = start + chunk_size
+        if end >= len(text):
+            chunks.append(text[start:])
+            break
+        boundary = text.rfind("\n\n", start, end)
+        if boundary == -1 or boundary <= start:
+            boundary = text.rfind("\n", start, end)
+        if boundary == -1 or boundary <= start:
+            boundary = end
+        chunks.append(text[start:boundary])
+        start = boundary
+    return [c.strip() for c in chunks if c.strip()]
+
+
+def chunk_by_chapters(text: str, chapter_pattern: str) -> list[str]:
+    """Split text at headings beginning with chapter_pattern."""
+    parts = re.split(rf'(?m)(?=^{re.escape(chapter_pattern)})', text)
+    return [p.strip() for p in parts if p.strip()]
+
+
+def prepare_chunks(
+    text: str,
+    chunk_size: int,
+    split_chapters: str | None = None,
+    split_label: str = "section",
+) -> tuple[list[str], str]:
+    """Chunk text by chapter prefix or character count, print progress, return (chunks, label).
+
+    split_label — word used in the progress line when splitting by prefix
+                  (e.g. "session", "chapter"). Defaults to "section".
+    """
+    if split_chapters:
+        chunks = chunk_by_chapters(text, split_chapters)
+        print(f"  {len(chunks)} {split_label}(s) to process (split on: {split_chapters!r})\n")
+        return chunks, split_label
+    chunks = chunk_text(text, chunk_size)
+    print(f"  {len(chunks)} chunk(s) to process (chunk size: {chunk_size:,} chars)\n")
+    return chunks, "chunk"
 
 
 # ── Config ────────────────────────────────────────────────────────────────────

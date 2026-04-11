@@ -323,15 +323,6 @@ def api_assemble():
     stripped = [strip_header(p) for p in parts]
     content = f"{title_line}\n\n---\n\n" + "\n\n---\n\n".join(stripped) + "\n"
 
-    # Append enhanced sections (Pass 2 output) if present
-    if CONFIG.get("extract_dir"):
-        enhanced_path = Path(CONFIG["extract_dir"]) / "enhanced_sections.md"
-        if enhanced_path.exists():
-            enhanced_text = enhanced_path.read_text(encoding="utf-8").strip()
-            if enhanced_text:
-                content += "\n---\n\n" + enhanced_text + "\n"
-                print(f"  Appended enhanced_sections.md")
-
     out_path = _assembled_output_path()
     out_path.write_text(content, encoding="utf-8")
 

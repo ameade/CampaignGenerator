@@ -34,7 +34,7 @@ import argparse
 import sys
 from pathlib import Path
 
-from campaignlib import make_client, stream_api
+from campaignlib import prepare_chunks, make_client, stream_api
 
 EXTRACT_SYSTEM = """\
 You are extracting party-relevant information from D&D session summary notes.
@@ -102,29 +102,12 @@ Rules:
 """
 
 
-def chunk_text(text: str, chunk_size: int) -> list[str]:
-    chunks = []
-    start = 0
-    while start < len(text):
-        end = start + chunk_size
-        if end >= len(text):
-            chunks.append(text[start:])
-            break
-        boundary = text.rfind("\n\n", start, end)
-        if boundary == -1 or boundary <= start:
-            boundary = text.rfind("\n", start, end)
-        if boundary == -1 or boundary <= start:
-            boundary = end
-        chunks.append(text[start:boundary])
-        start = boundary
-    return [c.strip() for c in chunks if c.strip()]
 
 
-def run_extract(client, summaries_text: str, chunk_size: int, model: str, extract_dir: Path) -> list[Path]:
-    chunks = chunk_text(summaries_text, chunk_size)
+def run_extract(client, summaries_text: str, chunk_size: int, model: str, extract_dir: Path,
+                split_chapters: str | None = None) -> list[Path]:
+    chunks, label = prepare_chunks(summaries_text, chunk_size, split_chapters, split_label="session")
     total = len(chunks)
-    print(f"  {total} chunk(s) to process (chunk size: {chunk_size:,} chars)\n")
-
     extract_dir.mkdir(parents=True, exist_ok=True)
     saved = []
 
@@ -135,7 +118,7 @@ def run_extract(client, summaries_text: str, chunk_size: int, model: str, extrac
             saved.append(out_file)
             continue
 
-        print(f"  [{i}/{total}] Extracting chunk ({len(chunk):,} chars)...")
+        print(f"  [{i}/{total}] Extracting {label} ({len(chunk):,} chars)...")
         print("  " + "─" * 56)
         result = stream_api(client, EXTRACT_SYSTEM, chunk, model)
         print("  " + "─" * 56)
@@ -223,6 +206,9 @@ def main() -> None:
                         help="Where to save the party document")
     parser.add_argument("--chunk-size", type=int, default=60000, metavar="CHARS",
                         help="Max characters per extract chunk (default: 60000)")
+    parser.add_argument("--split-chapters", metavar="PREFIX", default=None,
+                        help="Split summaries at lines beginning with PREFIX instead of by character "
+                             "count (e.g. '# Session'). Each session becomes one extract chunk.")
     parser.add_argument("--extract-dir", metavar="DIR", default=None,
                         help="Where to save/load session extractions "
                              "(default: <output_dir>/party_extractions/)")
@@ -263,7 +249,8 @@ def main() -> None:
         summaries_text = Path(args.summaries).expanduser().read_text(encoding="utf-8")
         print(f"\n[Pass 1: Extract party info | {len(summaries_text):,} chars | model: {args.model}]")
         print("=" * 60)
-        extract_files = run_extract(client, summaries_text, args.chunk_size, args.model, extract_dir)
+        extract_files = run_extract(client, summaries_text, args.chunk_size, args.model, extract_dir,
+                                    split_chapters=args.split_chapters)
         print(f"Extractions saved to: {extract_dir}")
     elif args.synthesize_only:
         extract_files = sorted(extract_dir.glob("extract_*.md"))

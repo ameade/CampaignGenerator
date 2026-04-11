@@ -888,7 +888,13 @@ def build_narrate_prompt(narrator: str, focus: str, char_moments: str,
                      f"(weave these into the narrative exactly as written)\n\n"
                      f"{char_moments.strip()}")
     else:
-        parts.append(f"## {narrator}'s Roleplay Moments\n\n{char_moments.strip()}")
+        parts.append(
+            f"## {narrator}'s Scene Moments\n"
+            f"(grouped format: each action beat line starting with \"-\" is followed by "
+            f"the dialogue that occurred during it — narrate beat and quotes together "
+            f"as a single moment; beats with no quotes are action-only moments)\n\n"
+            f"{char_moments.strip()}"
+        )
     return "\n\n---\n\n".join(parts)
 
 
@@ -1426,12 +1432,15 @@ def main() -> None:
 
         # Pass 5: narrate from character-specific moments
         voice_note = get_voice_note(voice_files, narrator) if voice_files else None
-        # Source scene_text from enhanced sections if available, else fall back to raw recap
+        # In --from-extractions mode the extraction file IS the scope — do not pass
+        # scene_text or the model will narrate content from the recap that the user
+        # intentionally left out of the extraction.
         scene_events_str = ""
-        if structured_sections and scene_name:
-            scene_events_str = extract_scene_text(structured_sections, scene_name)
-        elif scene_name and recap:
-            scene_events_str = extract_scene_text(recap, scene_name)
+        if not from_extractions_dir:
+            if structured_sections and scene_name:
+                scene_events_str = extract_scene_text(structured_sections, scene_name)
+            elif scene_name and recap:
+                scene_events_str = extract_scene_text(recap, scene_name)
         narrate_context = context_parts if args.reflections and context_parts else None
         extras = [x for x in ["voice notes" if voice_note else "",
                                "roleplay summary" if roleplay_summary else "",
@@ -1475,7 +1484,6 @@ def main() -> None:
         doc_parts.append(f"# {title}\n")
         for narrator, narration in section_texts:
             doc_parts.append(f"---\n\n## {narrator}\n\n{narration}")
-        doc_parts.append("---\n\n" + structured_sections.strip())
 
     full_doc = "\n\n".join(doc_parts) + "\n"
 

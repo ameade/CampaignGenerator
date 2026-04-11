@@ -18,6 +18,7 @@ const context = ref('')
 const output = ref('')
 const extractDir = ref('')
 const chunkSize = ref(60000)
+const splitChapters = ref('')
 const synthOnly = ref(false)
 const noLog = ref(false)
 const showAdvanced = ref(false)
@@ -27,6 +28,7 @@ const dossierSummaries = ref('')
 const dossierDir = ref('')
 const dossierExtractDir = ref('')
 const dossierChunkSize = ref(60000)
+const dossierSplitChapters = ref('')
 
 function loadFromConfig() {
   const v = config.values
@@ -37,11 +39,13 @@ function loadFromConfig() {
   output.value = v.plan_output || v.planning_output || ''
   extractDir.value = v.plan_extract_dir || ''
   chunkSize.value = v.plan_chunk_size || 60000
+  splitChapters.value = v.plan_split_chapters || ''
 
   dossierSummaries.value = v.plan_build_summaries || v.summaries || ''
   dossierDir.value = v.plan_dossier_dir || 'docs/npcs/'
   dossierExtractDir.value = v.plan_build_extract_dir || ''
   dossierChunkSize.value = v.plan_build_chunk_size || 60000
+  dossierSplitChapters.value = v.plan_build_split_chapters || ''
 }
 
 const npcList = computed(() =>
@@ -71,6 +75,7 @@ const synthParams = computed(() => ({
   output: output.value,
   extract_dir: extractDir.value,
   chunk_size: chunkSize.value,
+  split_chapters: splitChapters.value,
   synthesize_only: synthOnly.value,
   no_log: noLog.value,
   model: config.model,
@@ -81,6 +86,7 @@ const dossierParams = computed(() => ({
   dossier_dir: dossierDir.value,
   extract_dir: dossierExtractDir.value,
   chunk_size: dossierChunkSize.value,
+  split_chapters: dossierSplitChapters.value,
   no_log: noLog.value,
   model: config.model,
 }))
@@ -159,8 +165,16 @@ onMounted(() => { loadFromConfig() })
         <div v-if="showAdvanced" class="advanced-panel">
           <PathField v-model="extractDir" label="Extractions directory" resolve-base="campaign" />
           <div class="field">
+            <label class="field-label">Split by session prefix</label>
+            <input type="text" class="field-input" v-model="splitChapters"
+              placeholder="e.g. # Session — splits at each session heading" />
+            <span class="field-help">When set, each session becomes one extract chunk. Overrides chunk size.</span>
+          </div>
+          <div class="field">
             <label class="field-label">Chunk size (chars)</label>
-            <input type="number" class="field-input" v-model.number="chunkSize" min="10000" step="5000" />
+            <input type="number" class="field-input" v-model.number="chunkSize" min="10000" step="5000"
+              :disabled="!!splitChapters" />
+            <span class="field-help">Ignored when split-by-prefix is set. Default 60,000.</span>
           </div>
           <div class="field">
             <label class="checkbox-label">
@@ -200,8 +214,16 @@ onMounted(() => { loadFromConfig() })
         <div v-if="showAdvanced" class="advanced-panel">
           <PathField v-model="dossierExtractDir" label="Extractions directory" resolve-base="campaign" />
           <div class="field">
+            <label class="field-label">Split by session prefix</label>
+            <input type="text" class="field-input" v-model="dossierSplitChapters"
+              placeholder="e.g. # Session — splits at each session heading" />
+            <span class="field-help">When set, each session becomes one extract chunk. Overrides chunk size.</span>
+          </div>
+          <div class="field">
             <label class="field-label">Chunk size (chars)</label>
-            <input type="number" class="field-input" v-model.number="dossierChunkSize" min="10000" step="5000" />
+            <input type="number" class="field-input" v-model.number="dossierChunkSize" min="10000" step="5000"
+              :disabled="!!dossierSplitChapters" />
+            <span class="field-help">Ignored when split-by-prefix is set. Default 60,000.</span>
           </div>
         </div>
       </div>
@@ -263,6 +285,9 @@ onMounted(() => { loadFromConfig() })
   align-items: center; gap: 6px; cursor: pointer;
 }
 .checkbox-label input { accent-color: var(--mauve); }
+
+.field-help { display: block; font-size: 10px; color: var(--text-muted); margin-top: 3px; }
+.field-input:disabled { opacity: 0.4; cursor: not-allowed; }
 
 .advanced-panel {
   margin-top: 10px; padding: 10px;

@@ -186,67 +186,53 @@ async def api_auto_assign():
 # ── Generate extraction (Claude SSE) ─────────────────────────────────────
 
 GENERATE_EXTRACTION_SYSTEM = """\
-You are extracting character moments for a D&D session narrative.
+You are assembling a scene extraction file for a D&D session narrative.
 
-Given:
+You are given:
 - A scene's narrator, name, and focus
-- Verbatim VTT quotes assigned to this scene
-- The GM's recap text covering this scene
+- Verbatim VTT quotes assigned to this scene (the ONLY permitted source of dialogue)
+- (Optional) GM recap bullet points for this scene (the ONLY permitted source of action beats)
 
-Produce a scene extraction file with:
+Produce the extraction as grouped moments in chronological order.
 
-1. Dialogue exchanges — use the verbatim quotes provided, attributed correctly
-   Format: Speaker: "exact quote text"
-2. Action beats — what the characters did physically (from the recap)
-3. Environmental moments — setting, atmosphere (from the recap)
+Each moment is:
+- An action beat on its own line starting with "-" (copied verbatim from the recap)
+- Followed immediately (no indentation) by any quotes that occurred during that beat:
+  Speaker: "exact quote text"
+- Followed by a blank line before the next moment
 
-Format each moment as:
-**[brief scene label]**
-[dialogue lines]
-[action/environment description]
-[one sentence: what this moment felt like or cost]
+Place each assigned quote under the beat it most naturally belongs to — the beat that
+was happening when the character said it. Keep quotes in their original order relative
+to each other. Beats with no associated quotes appear alone. If quotes clearly precede
+all action beats, list them first with no preceding beat line.
 
-Keep everything in chronological order.
-IMPORTANT: Use ONLY the provided quotes for dialogue. Do not invent dialogue.
-Output only the extracted moments. No preamble, no commentary.
+IMPORTANT: Use ONLY the assigned quotes for dialogue. Do not invent dialogue or use
+any dialogue from the recap text. Do not reorder quotes relative to each other.
+Do not add labels, headers, emotional closing lines, or any prose of your own.
 
-SPEAKER LABEL NORMALISATION — apply to every dialogue attribution line:
-- GM or DM with any player name in parentheses (e.g. "Gabe", "GM (Gabe)", "DM (Gabe)") → always write as "GM"
-- Character names with a player name in parentheses (e.g. "Thorin (Joe)", "Grygum (Ben Pfaff)") → strip the parenthetical, write only the character name
-- Unnamed NPCs → keep as-is; do not invent a name
+SPEAKER LABEL NORMALISATION — apply to every dialogue line:
+- GM or DM with any player name in parentheses (e.g. "GM (Gabe)", "DM (Gabe)") → write as "GM"
+- Character names with a player name in parentheses (e.g. "Thorin (Joe)") → strip parenthetical, write only the character name
+- Unnamed NPCs → keep as-is
 
-OOC TABLE-TALK — cut entirely, do not include in the extraction:
-- Damage announcements: "16 more damage", "that's 22", "crit for 10 plus 6"
-- Roll calls: "Crit.", "nat 20", "I rolled an 8"
-- Mechanical outcome announcements mixed with conditions: "16 damage and she's grappled"
-- Player mechanic explanations to the GM: "I'm using my Eldritch Tentacles to hit her",
-  "I action surge", "I cast X at Y level"
-- GM mechanical rulings spoken as the GM (not as an NPC): "You take 18", "roll perception"
-- Out-of-character reactions, jokes, and cross-talk between players as themselves
+OOC TABLE-TALK — omit these quotes entirely:
+- Damage/roll announcements: "16 more damage", "nat 20", "crit for 10 plus 6"
+- Player mechanic explanations: "I action surge", "I cast X at Y level"
+- GM mechanical rulings (not NPC speech): "You take 18", "roll perception"
+- Out-of-character reactions and cross-talk
 
-The test — ask both questions:
-1. Would this line make sense spoken by the character TO another character in the scene?
-2. Does it contain mechanical game language (damage, conditions, spell names as mechanics,
-   ability names)?
-If the answer to (2) is yes, it is table-talk — cut it regardless of the speaker label.
-A line labeled "Zalthir:" that announces "16 damage and she's grappled" is the player
-speaking to the table, not Zalthir speaking to Ilvara.
+The test: does the line contain mechanical game language (damage numbers, conditions, spell
+names as mechanics)? If yes — cut it, regardless of speaker label.
 """
 
 GENERATE_EXTRACTION_PROSE_ADDENDUM = """\
 
-PROSE MODE: The extraction will be used for immersive first-person narration. Translate
-all mechanical game language into narrative experience — in action beats, environmental
-descriptions, and the closing sentence for each moment. Damage numbers, hit points, spell
-slots, saving throw DCs, and die results must not appear in the extraction.
-- Damage amounts → the weight and cost of the hit (scale: glancing / real impact /
-  serious / brutal)
-- Remaining HP statements → the character's felt condition and danger level
-- Spell slots → the effort or depletion of whatever resource the character draws on
-- Saving throw results → whether the character held, struggled, or was overcome
-
-In-character dialogue lines (character speaking to another character in the fiction) are
-kept verbatim. Player table-talk has already been removed per the OOC rules above.
+PROSE MODE: For action beat lines only, translate mechanical language into plain narrative
+description — no damage numbers, HP values, spell slot counts, or die results.
+- Damage amounts → the weight of the hit (glancing / real impact / serious / brutal)
+- Spell slots → the effort or resource the character draws on
+- Saving throws → whether the character held, struggled, or was overcome
+Dialogue lines are always kept verbatim. Do not alter quoted text.
 """
 
 
@@ -265,14 +251,9 @@ async def _stream_generate_extraction(scene_num: int) -> AsyncGenerator[str, Non
     scene = scenes[scene_num - 1]
     quotes = ledger.get_scene_quotes(scene_num)
 
-    if not quotes:
-        yield _sse_event(f"No quotes assigned to Scene {scene_num}. Assign quotes first.\n")
-        yield _sse_done(1)
-        return
-
     yield _sse_event(f"Generating extraction for Scene {scene_num}: "
                      f"{scene['narrator']} — {scene.get('scene', '')} "
-                     f"({len(quotes)} quotes)...\n")
+                     f"({len(quotes)} quote(s))...\n")
 
     # Build quote text
     quote_block = []
@@ -291,13 +272,19 @@ async def _stream_generate_extraction(scene_num: int) -> AsyncGenerator[str, Non
         if scene_name:
             recap_text = extract_scene_text(full_recap, scene_name)
 
+    if not recap_text and not quote_block:
+        yield _sse_event("No quotes assigned and no recap found for this scene — nothing to generate.\n")
+        yield _sse_done(1)
+        return
+
     user_prompt = (
         f"## Scene {scene_num}\n"
         f"Narrator: {scene['narrator']}\n"
         f"Scene: {scene.get('scene', 'N/A')}\n"
-        f"Focus: {scene.get('focus', 'N/A')}\n\n"
-        f"## Assigned Quotes\n" + "\n".join(quote_block)
+        f"Focus: {scene.get('focus', 'N/A')}\n"
     )
+    if quote_block:
+        user_prompt += f"\n## Assigned Quotes\n" + "\n".join(quote_block)
     if recap_text:
         user_prompt += f"\n\n## GM Recap Context\n{recap_text}"
 

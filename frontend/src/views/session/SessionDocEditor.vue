@@ -455,6 +455,16 @@ onMounted(async () => {
               Turn off to narrate from the extraction file only — useful for comparing results.
             </div>
           </div>
+          <div class="field">
+            <label class="field-label checkbox-label">
+              <input type="checkbox" v-model="reflections" @change="applyConfig" />
+              Reflections
+            </label>
+            <div class="field-help">
+              Inject campaign history (context files) into narration as memories and backstory references.
+              Useful when the scene calls for a character to reflect on past events or relationships.
+            </div>
+          </div>
         </div>
 
         <!-- Optional overrides -->
@@ -584,6 +594,7 @@ onMounted(async () => {
             :extracting="extracting"
             :prose-mode="proseMode"
             :reflections="reflections"
+            :use-enhanced-sections="useEnhancedSections"
             @save-extraction="saveExtraction"
             @save-roleplay="saveRoleplay"
             @reload="reload"
@@ -593,6 +604,7 @@ onMounted(async () => {
             @update:roleplay-content="roleplayContent = $event"
             @update:prose-mode="proseMode = $event; apiPut('/api/editor/config', { prose_mode: $event || undefined })"
             @update:reflections="reflections = $event; apiPut('/api/editor/config', { reflections: $event || undefined })"
+            @update:use-enhanced-sections="useEnhancedSections = $event"
           />
           <NarrationOutput
             :output="narrationOutput"
