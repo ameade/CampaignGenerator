@@ -179,17 +179,17 @@ def api_get_extraction(n: int):
     sys.path.insert(0, str(SCRIPT_DIR))
     from session_doc import estimate_narration_tokens
 
-    path = _get_extraction_path(n)
-    if path is None:
-        return JSONResponse({"exists": False, "content": ""}, status_code=404)
-    if not path.exists():
-        return {"exists": False, "content": "", "scene_label": f"Scene {n}"}
-    content = path.read_text(encoding="utf-8")
     scenes = _load_scenes()
-    s = scenes[n - 1] if n <= len(scenes) else {}
+    if n < 1 or n > len(scenes):
+        return JSONResponse({"exists": False, "content": ""}, status_code=404)
+    s = scenes[n - 1]
+    path = Path(CONFIG["extract_dir"]) / s["filename"]
     label = s.get("narrator", "")
     if s.get("scene"):
         label += f" — {s['scene']}"
+    if not path.exists():
+        return {"exists": False, "content": "", "scene_label": label}
+    content = path.read_text(encoding="utf-8")
     return {
         "exists": True,
         "content": content,
