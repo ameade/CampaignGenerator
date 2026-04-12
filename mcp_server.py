@@ -430,6 +430,28 @@ async def session_prep(beat: str, mode: str = "single", model: str = "") -> str:
 
 
 @mcp.tool()
+async def arc_triggers(character: str, top: int = 3) -> str:
+    """Search for arc score trigger candidates using mempalace's chronicle wing.
+
+    Finds the character's score tracking document via mempalace search,
+    extracts trigger definitions from it, then searches the chronicle
+    (timeline) wing for events matching each trigger. Returns candidates
+    organized by trigger with source references.
+
+    character — character name (e.g. 'brewbarry', 'soma', 'valphine').
+                Searches mempalace for the matching score doc — doesn't
+                need to be exact.
+    top       — max chronicle results per trigger (default: 3)
+
+    This is a candidate-finding tool — the DM decides whether a trigger fires.
+    """
+    args = ["--character", character]
+    if top != 3:
+        args += ["--top", str(top)]
+    return await _run_script("arc_triggers.py", args)
+
+
+@mcp.tool()
 async def generate_npc_table(docs: list[str] | None = None, model: str = "") -> str:
     """Generate a markdown NPC reference table (Name / Faction / Current State / Motivations).
 
