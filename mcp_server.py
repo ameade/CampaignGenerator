@@ -16,6 +16,12 @@ import re
 import sys
 from pathlib import Path
 
+try:
+    from mempalace.searcher import search_memories
+    _HAS_MEMPALACE = True
+except ImportError:
+    _HAS_MEMPALACE = False
+
 # ── Bootstrap ──────────────────────────────────────────────────────────────────
 
 SCRIPT_DIR = Path(__file__).resolve().parent
@@ -58,6 +64,13 @@ for _entry in config.get("documents", []):
 
 # Notes workspace (write-allowed area)
 notes_dir = campaign_dir / "notes"
+
+# Mempalace config (wing names are campaign-specific)
+_mp_config = config.get("mempalace", {})
+_mp_index_wings = _mp_config.get(
+    "index_wings", ["chronicle", campaign_dir.name.replace("-", "_")]
+)
+_mp_canon_wing = _mp_config.get("canon_wing", "narrative")
 
 # ── MCP server ────────────────────────────────────────────────────────────────
 
@@ -370,6 +383,127 @@ def append_note(filename: str, content: str, separator: str = "\n\n---\n\n") -> 
 
     target.write_text(new_content, encoding="utf-8")
     return f"Appended to: {target} ({len(new_content.encode('utf-8')):,} bytes total)"
+
+
+# ── Mempalace search tools ───────────────────────────────────────────────────
+
+
+_MP_PALACE_PATH = str(Path.home() / ".mempalace" / "palace")
+
+
+def _mempalace_search(
+    query: str,
+    wings: list[str],
+    n_results: int = 5,
+    room: str | None = None,
+) -> list[dict]:
+    """Search one or more mempalace wings, return merged results sorted by similarity."""
+    all_results: list[dict] = []
+    for wing in wings:
+        try:
+            resp = search_memories(
+                query=query,
+                palace_path=_MP_PALACE_PATH,
+                wing=wing,
+                room=room if room else None,
+                n_results=n_results,
+            )
+        except Exception:
+            continue
+        for hit in resp.get("results", []):
+            all_results.append(hit)
+    all_results.sort(key=lambda h: h.get("similarity", 0), reverse=True)
+    return all_results[:n_results]
+
+
+def _format_mp_results(results: list[dict], header: str = "Results") -> str:
+    """Format mempalace search results as structured markdown."""
+    if not results:
+        return ""
+    lines = [f"## {header}\n"]
+    for i, hit in enumerate(results, 1):
+        wing = hit.get("wing", "?")
+        room = hit.get("room", "?")
+        source = hit.get("source_file", "?")
+        sim = hit.get("similarity", 0)
+        text = hit.get("text", "").strip()
+        lines.append(f"### [{i}] {wing} / {room} — {source} ({sim:.2f})")
+        lines.append(f"> {text}\n")
+    return "\n".join(lines)
+
+
+@mcp.tool()
+def quick_search(query: str, limit: int = 5, room: str = "") -> str:
+    """Search the campaign's mempalace index (chronicle + current-state wings).
+
+    Returns structured results from the maintained index — NPC dossiers,
+    world-state snapshots, faction states, threat trackers. This is the fast
+    path for most lookups.
+
+    query — what to search for (e.g. "Shal advisor", "Zuggtmoy wedding")
+    limit — max results to return (default: 5)
+    room  — optional room filter (e.g. "npcs", "world", "arcs")
+
+    Use grounded_search instead when you need to verify a fact against the
+    canonical session narrative.
+    """
+    if not _HAS_MEMPALACE:
+        return "Error: mempalace is not installed. Run: pip install mempalace"
+
+    results = _mempalace_search(
+        query, _mp_index_wings, n_results=limit, room=room or None
+    )
+    if not results:
+        return f"No results found for '{query}'."
+    return _format_mp_results(results, header=f"Index results for: {query}")
+
+
+@mcp.tool()
+def grounded_search(query: str, limit: int = 3) -> str:
+    """Search the index then verify against the canonical session narrative.
+
+    Step 1: Searches chronicle + current-state wings (same as quick_search).
+    Step 2: Uses the top hit to search the narrative (chapter bible) for the
+    verbatim canonical passage.
+
+    Use this when building on a fact, designing a callback, or checking
+    something load-bearing. The narrative section is the authoritative record
+    of what actually happened at the table.
+
+    query — what to search for
+    limit — max index results (default: 3); narrative always returns top 3
+    """
+    if not _HAS_MEMPALACE:
+        return "Error: mempalace is not installed. Run: pip install mempalace"
+
+    # Step 1: index search
+    index_results = _mempalace_search(
+        query, _mp_index_wings, n_results=limit
+    )
+
+    # Step 2: narrative verification using top hit + original query
+    narrative_query = query
+    if index_results:
+        top_text = index_results[0].get("text", "")[:200]
+        narrative_query = f"{query} — {top_text}"
+
+    narrative_results = _mempalace_search(
+        narrative_query, [_mp_canon_wing], n_results=3
+    )
+
+    # Format both sections
+    parts: list[str] = []
+    if index_results:
+        parts.append(_format_mp_results(index_results, header=f"Index results for: {query}"))
+    else:
+        parts.append(f"No index results found for '{query}'.\n")
+
+    if narrative_results:
+        parts.append(_format_mp_results(narrative_results, header="Canon verification (narrative)"))
+    else:
+        parts.append("No narrative results found for verification.\n")
+
+    return "\n---\n\n".join(parts)
 
 
 # ── Claude-powered tools (subprocess) ─────────────────────────────────────────
