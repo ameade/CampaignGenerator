@@ -14,5 +14,5 @@ frontend/.vscode/
 frontend/README.md
 lib/
 summary
-server.pid
+server*.pid
 .claude/

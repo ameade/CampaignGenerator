@@ -7,35 +7,50 @@
 #       --campaign-dir ~/campaigns/out-of-the-abyss \
 #       --session-dir summaries/20260404
 #
+# Multiple instances: each gets its own port. If the requested port (default
+# 5000) is busy, the next free port is used automatically.  PID files are
+# per-port (server-<port>.pid) so instances don't collide.
+#
 # --session-dir may be relative to --campaign-dir or an absolute path.
 # Logs go to <session-dir>/logs/  (or CampaignGenerator/logs/ if no session).
-# PID is saved to CampaignGenerator/server.pid.
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
-PID_FILE="$SCRIPT_DIR/server.pid"
 
-# ── Check for already-running server ────────────────────────────────────────
-if [ -f "$PID_FILE" ]; then
-    OLD_PID="$(cat "$PID_FILE")"
-    if kill -0 "$OLD_PID" 2>/dev/null; then
-        echo "Server already running (PID $OLD_PID). Run $(dirname "$0")/stop first."
-        exit 1
-    else
-        rm -f "$PID_FILE"
-    fi
-fi
-
-# ── Parse --campaign-dir and --session-dir from args ────────────────────────
+# ── Parse --campaign-dir, --session-dir, --port from args ──────────────────
 CAMPAIGN_DIR_RAW=""
 SESSION_DIR_RAW=""
+PORT=5000
 PREV=""
 for ARG in "$@"; do
     case "$PREV" in
         --campaign-dir) CAMPAIGN_DIR_RAW="$ARG" ;;
         --session-dir)  SESSION_DIR_RAW="$ARG" ;;
+        --port)         PORT="$ARG" ;;
     esac
     PREV="$ARG"
 done
+
+# ── Find a free port ───────────────────────────────────────────────────────
+ORIGINAL_PORT=$PORT
+while ss -tln 2>/dev/null | grep -q ":${PORT} "; do
+    PORT=$((PORT + 1))
+done
+if [ "$PORT" -ne "$ORIGINAL_PORT" ]; then
+    echo "Port $ORIGINAL_PORT is in use — using port $PORT instead"
+fi
+
+PID_FILE="$SCRIPT_DIR/server-${PORT}.pid"
+
+# ── Check for already-running server on this port ──────────────────────────
+if [ -f "$PID_FILE" ]; then
+    OLD_PID="$(cat "$PID_FILE")"
+    if kill -0 "$OLD_PID" 2>/dev/null; then
+        echo "Server already running on port $PORT (PID $OLD_PID). Run $(dirname "$0")/stop --port $PORT first."
+        exit 1
+    else
+        rm -f "$PID_FILE"
+    fi
+fi
 
 # Resolve campaign dir to absolute
 if [ -n "$CAMPAIGN_DIR_RAW" ]; then
@@ -57,8 +72,9 @@ if [ -n "$SESSION_DIR_RAW" ]; then
     fi
 fi
 
-# ── Rebuild args with resolved absolute paths ────────────────────────────────
+# ── Rebuild args with resolved absolute paths and port ────────────────────────
 NEW_ARGS=()
+PORT_IN_ARGS=false
 PREV=""
 for ARG in "$@"; do
     case "$PREV" in
@@ -72,10 +88,19 @@ for ARG in "$@"; do
             PREV="$ARG"
             continue
             ;;
+        --port)
+            NEW_ARGS+=("$PORT")
+            PORT_IN_ARGS=true
+            PREV="$ARG"
+            continue
+            ;;
     esac
     NEW_ARGS+=("$ARG")
     PREV="$ARG"
 done
+if ! $PORT_IN_ARGS; then
+    NEW_ARGS+=("--port" "$PORT")
+fi
 
 # ── Determine log directory ──────────────────────────────────────────────────
 if [ -n "$SESSION_DIR_ABS" ]; then
@@ -113,7 +138,8 @@ if ! kill -0 "$SERVER_PID" 2>/dev/null; then
     exit 1
 fi
 
-echo "Server started (PID $SERVER_PID)"
-echo "Open http://localhost:5000 in your browser"
+echo "Server started (PID $SERVER_PID) on port $PORT"
+echo "Open http://localhost:$PORT in your browser"
 echo ""
 echo "  tail -f $LOG_FILE"
+echo "  $(dirname "$0")/stop --port $PORT"

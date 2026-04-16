@@ -1,35 +1,77 @@
 #!/bin/bash
-# Stop the CampaignGenerator server started by ./start.
+# Stop CampaignGenerator server(s) started by ./start.
+#
+# Usage:
+#   ./stop              # stop all running instances
+#   ./stop --port 5000  # stop only the instance on port 5000
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
-PID_FILE="$SCRIPT_DIR/server.pid"
 
-if [ ! -f "$PID_FILE" ]; then
-    echo "No PID file found — is the server running?"
+# Parse --port if given
+TARGET_PORT=""
+PREV=""
+for ARG in "$@"; do
+    if [ "$PREV" = "--port" ]; then
+        TARGET_PORT="$ARG"
+    fi
+    PREV="$ARG"
+done
+
+# Collect PID files to process
+if [ -n "$TARGET_PORT" ]; then
+    PID_FILES=("$SCRIPT_DIR/server-${TARGET_PORT}.pid")
+    # Also check legacy server.pid
+    if [ "$TARGET_PORT" = "5000" ] && [ -f "$SCRIPT_DIR/server.pid" ]; then
+        PID_FILES+=("$SCRIPT_DIR/server.pid")
+    fi
+else
+    # Stop all instances — gather all server*.pid files
+    PID_FILES=()
+    for f in "$SCRIPT_DIR"/server*.pid; do
+        [ -f "$f" ] && PID_FILES+=("$f")
+    done
+fi
+
+if [ ${#PID_FILES[@]} -eq 0 ]; then
+    echo "No PID files found — is a server running?"
     exit 1
 fi
 
-PID="$(cat "$PID_FILE")"
+FOUND_ANY=false
 
-if ! kill -0 "$PID" 2>/dev/null; then
-    echo "Process $PID not found. Cleaning up stale PID file."
-    rm -f "$PID_FILE"
-    exit 0
-fi
+for PID_FILE in "${PID_FILES[@]}"; do
+    [ -f "$PID_FILE" ] || continue
 
-echo "Stopping server (PID $PID)..."
-kill "$PID"
+    PID="$(cat "$PID_FILE")"
+    LABEL="$(basename "$PID_FILE" .pid)"
 
-for i in $(seq 1 10); do
     if ! kill -0 "$PID" 2>/dev/null; then
+        echo "Process $PID ($LABEL) not found. Cleaning up stale PID file."
         rm -f "$PID_FILE"
-        echo "Server stopped."
-        exit 0
+        continue
     fi
-    sleep 0.5
+
+    FOUND_ANY=true
+    echo "Stopping $LABEL (PID $PID)..."
+    kill "$PID"
+
+    for i in $(seq 1 10); do
+        if ! kill -0 "$PID" 2>/dev/null; then
+            rm -f "$PID_FILE"
+            echo "  Stopped."
+            break
+        fi
+        sleep 0.5
+    done
+
+    if kill -0 "$PID" 2>/dev/null; then
+        echo "  Didn't stop cleanly — sending SIGKILL."
+        kill -9 "$PID" 2>/dev/null
+        rm -f "$PID_FILE"
+        echo "  Killed."
+    fi
 done
 
-echo "Server didn't stop cleanly — sending SIGKILL."
-kill -9 "$PID" 2>/dev/null
-rm -f "$PID_FILE"
-echo "Server killed."
+if ! $FOUND_ANY; then
+    echo "No running servers found."
+fi

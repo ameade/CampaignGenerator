@@ -16,9 +16,17 @@ if [ ! -d "$DIST" ] || [ "$SCRIPT_DIR/frontend/src" -nt "$DIST/index.html" ]; th
   cd "$SCRIPT_DIR"
 fi
 
+# Parse --port from args for the startup message
+PORT=5000
+PREV=""
+for ARG in "$@"; do
+    if [ "$PREV" = "--port" ]; then PORT="$ARG"; fi
+    PREV="$ARG"
+done
+
 # Launch FastAPI (serves the Vue build as static files)
 # PYTHONPATH lets `python -m server.main` find the server package
 # while keeping CWD as the campaign directory (for ui_config.yaml)
-echo "Starting Campaign Generator on http://localhost:5000"
+echo "Starting Campaign Generator on http://localhost:$PORT"
 export PYTHONPATH="$SCRIPT_DIR${PYTHONPATH:+:$PYTHONPATH}"
 exec python -m server.main "$@"
