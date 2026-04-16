@@ -230,6 +230,50 @@ python planning.py \
 
 `--build-dossiers` extracts per-NPC information from summaries into individual files (`docs/npcs/grundar_quartzvein.md`, etc.) for review and editing before the synthesize pass.
 
+#### Dossier merge workflow (alias preservation)
+
+`--build-dossiers` splits on exact `## <name>` section headers, so name variants in the summaries ("Captain Tolubb" vs "Tolubb", typos like "Xalvos" vs "Xalvosh") produce duplicate files. Merge them manually, then record the variants in the surviving file's `aliases:` frontmatter so synthesis can resolve references in raw session extracts back to the canonical NPC.
+
+Every dossier is created with frontmatter:
+
+```markdown
+---
+name: Tolubb
+aliases: []
+---
+
+# Tolubb
+...
+```
+
+**Merge rules:**
+
+1. Pick the canonical file (usually the cleanest name or the one with the most data).
+2. For each file folded in: append its `name` value **and** all entries in its `aliases:` list into the canonical file's `aliases:` list.
+3. Reconcile the body per duplicate type:
+   - **Pure duplicate, no unique data** → delete loser, no body edit needed.
+   - **One file has most data** → keep the richer body, just fold the name into aliases.
+   - **Both have unique data** → merge the bodies (manually, or ask Claude) before deleting.
+4. Delete the folded-in files.
+
+**After-merge example** — `captain_tolubb.md` and `cap_tolubb.md` folded into `tolubb.md`:
+
+```markdown
+---
+name: Tolubb
+aliases:
+  - Captain Tolubb
+  - Cap. Tolubb
+---
+
+# Tolubb
+[reconciled body]
+```
+
+**Why this matters:** `run_synthesize()` in `planning.py` parses each dossier's `aliases:`, compiles a case-insensitive longest-first regex, and rewrites every occurrence of a variant in session extractions, arc-scores, and context files to the canonical name **before the LLM sees them**. It also prepends an `# ENTITY RESOLUTION` block to the system prompt listing canonical ↔ alias pairs. Aliases not recorded in frontmatter = synthesis treats the variant as a distinct NPC, re-fragmenting exactly what the merge was supposed to fix.
+
+Dossiers without frontmatter (pre-existing files) still work — `parse_dossier()` falls back to the filename stem as name and empty aliases — but they can't contribute aliases. Add frontmatter to any dossier that has known variants.
+
 ### party.py
 
 Generates `party.md` from character sheets, session summaries, backstories, and arc score mechanics.

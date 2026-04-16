@@ -46,7 +46,61 @@ import re
 import sys
 from pathlib import Path
 
+import yaml
+
 from campaignlib import prepare_chunks, make_client, stream_api
+
+
+DOSSIER_FRONTMATTER_RE = re.compile(r"\A---\n(.*?)\n---\n\n?(.*)\Z", re.DOTALL)
+
+
+def parse_dossier(path: Path) -> tuple[str, list[str], str]:
+    """Return (canonical_name, aliases, body_without_frontmatter).
+
+    Dossiers without frontmatter fall back to filename stem as name and no aliases,
+    so pre-existing files keep working untouched.
+    """
+    text = path.read_text(encoding="utf-8")
+    m = DOSSIER_FRONTMATTER_RE.match(text)
+    if not m:
+        return (path.stem, [], text)
+    try:
+        meta = yaml.safe_load(m.group(1)) or {}
+    except yaml.YAMLError:
+        return (path.stem, [], text)
+    name = meta.get("name") or path.stem
+    aliases = meta.get("aliases") or []
+    if not isinstance(aliases, list):
+        aliases = []
+    return (str(name), [str(a) for a in aliases], m.group(2))
+
+
+def build_alias_normalizer(
+    canonical_to_aliases: dict[str, list[str]],
+) -> tuple[callable, list[tuple[str, list[str]]]]:
+    """Return (normalize(text) -> text, [(canonical, aliases), ...]) for resolution-block use.
+
+    Longest aliases first so "Captain Tolubb" wins over "Tolubb" when both are aliases.
+    """
+    alias_to_canonical: dict[str, str] = {}
+    for canonical, aliases in canonical_to_aliases.items():
+        for alias in aliases:
+            alias_to_canonical[alias.lower()] = canonical
+
+    if not alias_to_canonical:
+        return (lambda text: text, [])
+
+    sorted_aliases = sorted(alias_to_canonical.keys(), key=len, reverse=True)
+    pattern = re.compile(
+        r"\b(" + "|".join(re.escape(a) for a in sorted_aliases) + r")\b",
+        flags=re.IGNORECASE,
+    )
+
+    def normalize(text: str) -> str:
+        return pattern.sub(lambda m: alias_to_canonical[m.group(0).lower()], text)
+
+    entries = [(c, a) for c, a in canonical_to_aliases.items() if a]
+    return (normalize, entries)
 
 EXTRACT_SYSTEM = """\
 You are extracting NPC and faction-relevant information from D&D session summary notes.
@@ -281,7 +335,8 @@ def run_build_dossiers(
         print("  " + "─" * 56)
         dossier = stream_api(client, BUILD_SYNTHESIZE_SYSTEM, raw_notes, model)
         print("  " + "─" * 56)
-        out_file.write_text(dossier.strip() + "\n", encoding="utf-8")
+        frontmatter = f"---\nname: {npc_name}\naliases: []\n---\n\n"
+        out_file.write_text(frontmatter + dossier.strip() + "\n", encoding="utf-8")
         saved.append(out_file)
         print(f"  Saved: {out_file.name}\n")
 
@@ -298,30 +353,35 @@ def run_synthesize(
 ) -> str:
     parts = []
 
-    if npc_files:
-        dossiers = "\n\n---\n\n".join(
-            f"<!-- NPC dossier: {f.name} -->\n\n{f.read_text(encoding='utf-8').strip()}"
-            for f in npc_files
-        )
-        parts.append(f"# NPC DOSSIERS\n\n{dossiers}")
+    canonical_to_aliases: dict[str, list[str]] = {}
+    dossier_blocks: list[str] = []
+    for f in npc_files:
+        name, aliases, body = parse_dossier(f)
+        canonical_to_aliases[name] = aliases
+        dossier_blocks.append(f"<!-- NPC dossier: {f.name} -->\n\n{body.strip()}")
+
+    normalize, resolution_entries = build_alias_normalizer(canonical_to_aliases)
+
+    if dossier_blocks:
+        parts.append("# NPC DOSSIERS\n\n" + "\n\n---\n\n".join(dossier_blocks))
 
     if arc_score_files:
         arc_scores = "\n\n---\n\n".join(
-            f"<!-- Threat arc score: {f.name} -->\n\n{f.read_text(encoding='utf-8').strip()}"
+            f"<!-- Threat arc score: {f.name} -->\n\n{normalize(f.read_text(encoding='utf-8').strip())}"
             for f in arc_score_files
         )
         parts.append(f"# THREAT ARC SCORE MECHANICS\n\n{arc_scores}")
 
     if extract_files:
         extractions = "\n\n---\n\n".join(
-            f"<!-- Session extract: {f.name} -->\n\n{f.read_text(encoding='utf-8').strip()}"
+            f"<!-- Session extract: {f.name} -->\n\n{normalize(f.read_text(encoding='utf-8').strip())}"
             for f in sorted(extract_files)
         )
         parts.append(f"# SESSION EXTRACTIONS\n\n{extractions}")
 
     if context_files:
         context = "\n\n---\n\n".join(
-            f"<!-- World context: {f.name} -->\n\n{f.read_text(encoding='utf-8').strip()}"
+            f"<!-- World context: {f.name} -->\n\n{normalize(f.read_text(encoding='utf-8').strip())}"
             for f in context_files
         )
         parts.append(f"# WORLD CONTEXT\n\n{context}")
@@ -331,9 +391,24 @@ def run_synthesize(
         print("Error: no source material to synthesize — provide --npc, --arc-scores, or --summaries.",
               file=sys.stderr)
         raise SystemExit(1)
+
+    system_prompt = SYNTHESIZE_SYSTEM
+    if resolution_entries:
+        lines = [f"- **{name}** (also: {', '.join(aliases)})"
+                 for name, aliases in resolution_entries]
+        resolution_block = (
+            "# ENTITY RESOLUTION\n\n"
+            "The source text below has been pre-normalized: variant names have been "
+            "replaced with the canonical NPC name. If any variant still appears, treat "
+            "it as referring to the canonical NPC listed here.\n\n"
+            + "\n".join(lines) + "\n\n"
+        )
+        system_prompt = resolution_block + SYNTHESIZE_SYSTEM
+        print(f"  Alias map: {len(resolution_entries)} NPC(s) with variants.")
+
     print(f"  Synthesizing ({len(user_prompt):,} chars total)...")
     print("  " + "─" * 56)
-    result = stream_api(client, SYNTHESIZE_SYSTEM, user_prompt, model)
+    result = stream_api(client, system_prompt, user_prompt, model)
     print("  " + "─" * 56)
     return result
 
