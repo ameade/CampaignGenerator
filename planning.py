@@ -272,8 +272,15 @@ def run_extract(client, summaries_text: str, chunk_size: int, model: str, extrac
 def run_build_dossiers(
     client, summaries_text: str, chunk_size: int, model: str, extract_dir: Path, dossier_dir: Path,
     split_chapters: str | None = None,
+    since: int | None = None,
 ) -> list[Path]:
-    """Two-phase dossier builder: extract per-chunk → aggregate by NPC → synthesize each dossier."""
+    """Two-phase dossier builder: extract per-chunk → aggregate by NPC → synthesize each dossier.
+
+    since — if set, Phase 2 aggregation and Phase 3 synthesis only consider extracts with
+            number >= since. Phase 1 extraction is unaffected (cache already handles it).
+            Use this after a new session: --since <new_extract_num> skips re-processing
+            historical chunks that have already been rolled into dossiers.
+    """
 
     # ── Phase 1: extract NPC mentions from each chunk ─────────────────────────
     chunks, label = prepare_chunks(summaries_text, chunk_size, split_chapters, split_label="session")
@@ -310,9 +317,13 @@ def run_build_dossiers(
     # files for NPCs whose canonical dossier already exists.
     npc_by_extract: dict[str, dict[int, list[str]]] = {}
     alias_resolutions: dict[str, str] = {}
+    if since is not None:
+        print(f"\n  [--since {since}] aggregating only extracts with number >= {since}")
     for extract_file in sorted(extract_dir.glob("dossier_extract_*.md")):
         m = re.search(r"dossier_extract_(\d+)\.md", extract_file.name)
         extract_num = int(m.group(1)) if m else 0
+        if since is not None and extract_num < since:
+            continue
         content = extract_file.read_text(encoding="utf-8")
         # split on lines that start with "## "
         sections = re.split(r"(?m)^## ", content)
@@ -499,12 +510,20 @@ def main() -> None:
     parser.add_argument("--dossier-dir", metavar="DIR", default=None,
                         help="Where to save per-NPC dossier files when using --build-dossiers "
                              "(default: ./npcs/ relative to CWD)")
+    parser.add_argument("--since", type=int, metavar="N", default=None,
+                        help="In --build-dossiers mode, aggregate and synthesize only from "
+                             "extracts with number >= N. Use after a new session "
+                             "(e.g. --since 11 when extract_011.md is the new chunk) to skip "
+                             "historical chunks already rolled into dossiers.")
     parser.add_argument("--model", default="claude-sonnet-4-20250514",
                         help="Claude model to use")
     args = parser.parse_args()
 
     if args.build_dossiers and not args.summaries:
         print("Error: --build-dossiers requires --summaries", file=sys.stderr)
+        sys.exit(1)
+    if args.since is not None and not args.build_dossiers:
+        print("Error: --since only applies in --build-dossiers mode", file=sys.stderr)
         sys.exit(1)
     if not args.build_dossiers and not args.output:
         print("Error: --output is required (unless using --build-dossiers)", file=sys.stderr)
@@ -543,7 +562,7 @@ def main() -> None:
         print(f"\n[Build dossiers | {len(summaries_text):,} chars | model: {args.model}]")
         print("=" * 60)
         saved = run_build_dossiers(client, summaries_text, args.chunk_size, args.model, extract_dir, dossier_dir,
-                                    split_chapters=args.split_chapters)
+                                    split_chapters=args.split_chapters, since=args.since)
         print("=" * 60)
         print(f"\n{len(saved)} dossier file(s) saved to: {dossier_dir}")
         print("\nNext steps:")
