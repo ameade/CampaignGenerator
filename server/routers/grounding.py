@@ -189,6 +189,7 @@ async def run_build_dossiers(
     extract_dir: str = "",
     chunk_size: int = 60000,
     split_chapters: str = "",
+    since: int = 0,
     no_log: bool = False,
     model: str = "claude-sonnet-4-6",
 ):
@@ -203,6 +204,9 @@ async def run_build_dossiers(
         cmd += ["--split-chapters", split_chapters]
     elif chunk_size and chunk_size != 60000:
         cmd += ["--chunk-size", str(chunk_size)]
+
+    if since > 0:
+        cmd += ["--since", str(since)]
 
     _cmd_flag(cmd, "--no-log", no_log)
     cmd += ["--model", model]

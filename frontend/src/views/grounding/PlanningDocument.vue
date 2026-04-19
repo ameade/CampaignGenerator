@@ -29,6 +29,7 @@ const dossierDir = ref('')
 const dossierExtractDir = ref('')
 const dossierChunkSize = ref(60000)
 const dossierSplitChapters = ref('')
+const dossierSince = ref(0)
 
 function loadFromConfig() {
   const v = config.values
@@ -87,6 +88,7 @@ const dossierParams = computed(() => ({
   extract_dir: dossierExtractDir.value,
   chunk_size: dossierChunkSize.value,
   split_chapters: dossierSplitChapters.value,
+  since: dossierSince.value,
   no_log: noLog.value,
   model: config.model,
 }))
@@ -224,6 +226,15 @@ onMounted(() => { loadFromConfig() })
             <input type="number" class="field-input" v-model.number="dossierChunkSize" min="10000" step="5000"
               :disabled="!!dossierSplitChapters" />
             <span class="field-help">Ignored when split-by-prefix is set. Default 60,000.</span>
+          </div>
+          <div class="field">
+            <label class="field-label">Since chunk N (incremental)</label>
+            <input type="number" class="field-input" v-model.number="dossierSince" min="0" step="1" />
+            <span class="field-help">
+              Aggregate and synthesize only from extracts numbered ≥ N. Use after a new session
+              (e.g. 11 when dossier_extract_011.md is the new chunk) to skip historical chunks
+              already rolled into dossiers. 0 = disabled (full rebuild).
+            </span>
           </div>
         </div>
       </div>
