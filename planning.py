@@ -75,6 +75,18 @@ def parse_dossier(path: Path) -> tuple[str, list[str], str]:
     return (str(name), [str(a) for a in aliases], m.group(2))
 
 
+def _normalize_npc_key(name: str) -> str:
+    """Lowercase + strip punctuation + collapse whitespace for alias matching.
+
+    LLM-emitted variants like "Harbin (Townmaster)", "Elara 'Seasong' Meliamne",
+    or "Toblen Stonehill (Spiderman)" must match flat aliases like
+    "Harbin Townmaster". Without normalization the parens/quotes block the lookup.
+    """
+    s = re.sub(r"[\(\)\[\]\'\"`\-]", "", name.lower())
+    s = re.sub(r"\s+", " ", s).strip()
+    return s
+
+
 def build_alias_normalizer(
     canonical_to_aliases: dict[str, list[str]],
 ) -> tuple[callable, list[tuple[str, list[str]]]]:
@@ -302,15 +314,18 @@ def run_build_dossiers(
     # ── Load existing dossiers to resolve merged aliases ─────────────────────
     # After /dossier-merge, name variants live in the canonical file's `aliases:`
     # frontmatter. Without this, a rerun would re-create the merged-away duplicates.
+    # Keys are normalized (punctuation stripped, whitespace collapsed) so that
+    # LLM-emitted variants like "Harbin (Townmaster)" still match an alias
+    # recorded as "Harbin Townmaster".
     dossier_dir.mkdir(parents=True, exist_ok=True)
     existing_dossiers: dict[str, Path] = {}
     alias_to_canonical: dict[str, str] = {}
     for dossier_file in dossier_dir.glob("*.md"):
         name, aliases, _ = parse_dossier(dossier_file)
-        existing_dossiers[name.lower()] = dossier_file
-        alias_to_canonical[name.lower()] = name
+        existing_dossiers[_normalize_npc_key(name)] = dossier_file
+        alias_to_canonical[_normalize_npc_key(name)] = name
         for alias in aliases:
-            alias_to_canonical[alias.lower()] = name
+            alias_to_canonical[_normalize_npc_key(alias)] = name
 
     # ── Phase 2: aggregate sections by NPC name (folding aliases) ────────────
     # Track source extract per body so we can write per-extract new_notes
@@ -336,7 +351,7 @@ def run_build_dossiers(
             body = "\n".join(lines[1:]).strip()
             if not (npc_name and body):
                 continue
-            canonical = alias_to_canonical.get(npc_name.lower(), npc_name)
+            canonical = alias_to_canonical.get(_normalize_npc_key(npc_name), npc_name)
             if canonical != npc_name:
                 alias_resolutions[npc_name] = canonical
             npc_by_extract.setdefault(canonical, {}).setdefault(extract_num, []).append(body)
@@ -365,8 +380,8 @@ def run_build_dossiers(
         # drop per-extract new_notes files beside it for the user to manually
         # merge. Named after the existing dossier's stem so aliased files land
         # next to their canonical owner.
-        if npc_name.lower() in existing_dossiers:
-            existing_file = existing_dossiers[npc_name.lower()]
+        if _normalize_npc_key(npc_name) in existing_dossiers:
+            existing_file = existing_dossiers[_normalize_npc_key(npc_name)]
             stem = existing_file.stem
             written = []
             for extract_num, bodies in sorted(npc_by_extract[npc_name].items()):
