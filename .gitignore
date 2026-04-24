@@ -2,6 +2,7 @@ logs/
 xalvosh
 *.pyc
 __pycache__/
+venv/
 .env
 node_modules/
 frontend/dist/

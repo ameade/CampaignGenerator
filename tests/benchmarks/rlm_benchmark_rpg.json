@@ -1,0 +1,310 @@
+{
+  "benchmark": "rlm_benchmark_rpg",
+  "version": 1,
+  "description": "Gate 2 fixture for the RLM integration plan. Tests the CampaignGenerator retriever (rpglib + MemPalace) on an RPG-shaped corpus: several converted adventures in wing_rpglib, a small bestiary in wing_bestiary, and one unconverted book in rpglib so the pointer path exercises too. The real corpus lives on the user's machine; this fixture is self-contained so Gate 2 is reproducible in CI.",
+  "fixture": {
+    "seed": 7831,
+    "books": [
+      {
+        "id": 100,
+        "filename": "icespire.pdf",
+        "filepath": "/fake/rpglib/icespire.pdf",
+        "publisher": "Wizards of the Coast",
+        "game_system": "D&D 5e",
+        "product_type": "adventure",
+        "series": "Essentials Kit",
+        "tags": ["icewind", "starter", "dragon"],
+        "page_count": 64,
+        "pdf_title": "Dragon of Icespire Peak",
+        "description": "Essentials Kit starter adventure with a white dragon menacing the Sword Coast frontier.",
+        "min_level": 1,
+        "max_level": 6,
+        "room_slug": "dragon-of-icespire-peak",
+        "ingested": true
+      },
+      {
+        "id": 101,
+        "filename": "obojima.pdf",
+        "filepath": "/fake/rpglib/obojima.pdf",
+        "publisher": "Atlas Games",
+        "game_system": "D&D 5e",
+        "product_type": "adventure",
+        "series": "Obojima",
+        "tags": ["asian-fantasy", "island", "spirits", "horror"],
+        "page_count": 260,
+        "pdf_title": "Obojima — Tales from the Tall Grass",
+        "description": "Japanese-inspired open island adventure with yokai and samurai factions.",
+        "min_level": 1,
+        "max_level": 10,
+        "room_slug": "obojima",
+        "ingested": true
+      },
+      {
+        "id": 102,
+        "filename": "oota.pdf",
+        "filepath": "/fake/rpglib/oota.pdf",
+        "publisher": "Wizards of the Coast",
+        "game_system": "D&D 5e",
+        "product_type": "adventure",
+        "series": "Sword Coast",
+        "tags": ["underdark", "demon", "drow", "faerzress"],
+        "page_count": 256,
+        "pdf_title": "Out of the Abyss",
+        "description": "Underdark adventure featuring demon lords and drow houses.",
+        "min_level": 1,
+        "max_level": 15,
+        "room_slug": "out-of-the-abyss",
+        "ingested": true
+      },
+      {
+        "id": 103,
+        "filename": "mm.pdf",
+        "filepath": "/fake/rpglib/mm.pdf",
+        "publisher": "Wizards of the Coast",
+        "game_system": "D&D 5e",
+        "product_type": "bestiary",
+        "series": "Core",
+        "tags": ["core", "reference", "monsters"],
+        "page_count": 352,
+        "pdf_title": "Monster Manual",
+        "description": "Core creature compendium for D&D 5th edition.",
+        "min_level": null,
+        "max_level": null,
+        "room_slug": "monster-manual",
+        "ingested": true
+      },
+      {
+        "id": 104,
+        "filename": "strahd.pdf",
+        "filepath": "/fake/rpglib/strahd.pdf",
+        "publisher": "Wizards of the Coast",
+        "game_system": "D&D 5e",
+        "product_type": "adventure",
+        "series": "Ravenloft",
+        "tags": ["gothic", "horror", "barovia", "ravenloft"],
+        "page_count": 256,
+        "pdf_title": "Curse of Strahd",
+        "description": "Gothic horror adventure in the demiplane of Barovia.",
+        "min_level": 1,
+        "max_level": 10,
+        "room_slug": "curse-of-strahd",
+        "ingested": false,
+        "notes": "Intentionally NOT ingested — queries about Strahd should surface a pointer hit with a suggest_conversion payload."
+      }
+    ],
+    "drawers": [
+      {
+        "id": "drawer_icespire_hold_entry",
+        "book_id": 100,
+        "wing": "wing_rpglib",
+        "room": "room_dragon-of-icespire-peak",
+        "section_path": "Dragon of Icespire Peak / Icespire Hold",
+        "entry_type": "section",
+        "text": "Icespire Hold is the white dragon Cryovain's lair atop the mountain. The approach is a winding ice-sheathed stair; fog rolls down from the summit. Grundar Quartzvein the dwarven foreman was captured during the assault."
+      },
+      {
+        "id": "drawer_icespire_carver_camp",
+        "book_id": 100,
+        "wing": "wing_rpglib",
+        "room": "room_dragon-of-icespire-peak",
+        "section_path": "Dragon of Icespire Peak / Axeholm Ruins",
+        "entry_type": "inset",
+        "text": "Falcon's camp sits outside the ruined dwarven keep of Axeholm. Harbin Wester, the nervous townmaster, sent the party to scout it."
+      },
+      {
+        "id": "drawer_obojima_spirits",
+        "book_id": 101,
+        "wing": "wing_rpglib",
+        "room": "room_obojima",
+        "section_path": "Obojima / Kodama Groves",
+        "entry_type": "entries",
+        "text": "The kodama tree spirits haunt the bamboo valleys. They speak only in rustling leaves and the clack of wooden chimes. Offerings of rice wine calm them; cutting a sacred tree draws their wrath."
+      },
+      {
+        "id": "drawer_obojima_kappa",
+        "book_id": 101,
+        "wing": "wing_bestiary",
+        "room": "room_obojima",
+        "section_path": "Obojima / Bestiary / Kappa",
+        "entry_type": "statblock",
+        "text": "# Kappa\ntag: creature\nsource: OBOJIMA\ncr: 1/2\nRiver yokai. Polite but dangerous. Bow to spill the water from its head-bowl and it loses its strength. Prefers rivers and rice paddies."
+      },
+      {
+        "id": "drawer_obojima_oni",
+        "book_id": 101,
+        "wing": "wing_bestiary",
+        "room": "room_obojima",
+        "section_path": "Obojima / Bestiary / Oni",
+        "entry_type": "statblock",
+        "text": "# Oni of the Crimson Mountain\ntag: fiend\nsource: OBOJIMA\ncr: 7\nOgre-like demon with regeneration and a taste for human flesh. Flies on clawed wings; wields a kanabō iron club."
+      },
+      {
+        "id": "drawer_oota_velkynvelve",
+        "book_id": 102,
+        "wing": "wing_rpglib",
+        "room": "room_out-of-the-abyss",
+        "section_path": "Out of the Abyss / Chapter 1 / Velkynvelve",
+        "entry_type": "section",
+        "text": "Velkynvelve is the drow outpost where the party begins, prisoners of priestess Ilvara Mizzrym. Escape requires stealing keys from the guard drider and negotiating with other captives like Stool the myconid sprout."
+      },
+      {
+        "id": "drawer_oota_darklake",
+        "book_id": 102,
+        "wing": "wing_rpglib",
+        "room": "room_out-of-the-abyss",
+        "section_path": "Out of the Abyss / Chapter 3 / Darklake",
+        "entry_type": "entries",
+        "text": "The Darklake is a cavern-sea in the Underdark. Kuo-toa villages line the shores; demonic madness infects the water. Boats made of giant mushroom caps are the local transport."
+      },
+      {
+        "id": "drawer_oota_juiblex",
+        "book_id": 102,
+        "wing": "wing_bestiary",
+        "room": "room_out-of-the-abyss",
+        "section_path": "Out of the Abyss / Bestiary / Juiblex",
+        "entry_type": "statblock",
+        "text": "# Juiblex, the Faceless Lord\ntag: fiend\nsource: OOTA\ncr: 23\nDemon lord of slimes and oozes. Amorphous form absorbs weapons. Acid aura liquefies organic matter within 10 feet."
+      },
+      {
+        "id": "drawer_mm_bugbear_chief",
+        "book_id": 103,
+        "wing": "wing_bestiary",
+        "room": "room_monster-manual",
+        "section_path": "Monster Manual / Bugbears",
+        "entry_type": "statblock",
+        "text": "# Bugbear Chief\ntag: creature\nsource: MM\ncr: 3\nGoblinoid warlord. Heart Strike grants +7 damage on surprise attacks; martial advantage on allied flanks."
+      },
+      {
+        "id": "drawer_mm_ancient_white_dragon",
+        "book_id": 103,
+        "wing": "wing_bestiary",
+        "room": "room_monster-manual",
+        "section_path": "Monster Manual / Dragons / Ancient White Dragon",
+        "entry_type": "statblock",
+        "text": "# Ancient White Dragon\ntag: dragon\nsource: MM\ncr: 20\nArctic apex predator. Ice Walk, Cold Immunity, Frightful Presence. Breath weapon is a 90-foot cone of freezing air."
+      },
+      {
+        "id": "drawer_mm_owlbear",
+        "book_id": 103,
+        "wing": "wing_bestiary",
+        "room": "room_monster-manual",
+        "section_path": "Monster Manual / Owlbear",
+        "entry_type": "statblock",
+        "text": "# Owlbear\ntag: creature\nsource: MM\ncr: 3\nFeywild predator with bear body and owl head. Multiattack claws + bite. Keen Sight."
+      }
+    ]
+  },
+  "queries": [
+    {
+      "id": "q01",
+      "query": "Cryovain white dragon Icespire Hold",
+      "expected_kind": "drawer",
+      "expected_book_id": 100,
+      "expected_drawer_id": "drawer_icespire_hold_entry"
+    },
+    {
+      "id": "q02",
+      "query": "Harbin Wester townmaster Falcon camp",
+      "expected_kind": "drawer",
+      "expected_book_id": 100,
+      "expected_drawer_id": "drawer_icespire_carver_camp"
+    },
+    {
+      "id": "q03",
+      "query": "kodama tree spirits bamboo offerings",
+      "expected_kind": "drawer",
+      "expected_book_id": 101,
+      "expected_drawer_id": "drawer_obojima_spirits"
+    },
+    {
+      "id": "q04",
+      "query": "kappa river yokai bow trick",
+      "expected_kind": "statblock",
+      "expected_book_id": 101,
+      "expected_drawer_id": "drawer_obojima_kappa"
+    },
+    {
+      "id": "q05",
+      "query": "oni flying kanabo crimson mountain",
+      "expected_kind": "statblock",
+      "expected_book_id": 101,
+      "expected_drawer_id": "drawer_obojima_oni"
+    },
+    {
+      "id": "q06",
+      "query": "velkynvelve drow prison ilvara",
+      "expected_kind": "drawer",
+      "expected_book_id": 102,
+      "expected_drawer_id": "drawer_oota_velkynvelve"
+    },
+    {
+      "id": "q07",
+      "query": "darklake kuo-toa mushroom boats underdark",
+      "expected_kind": "drawer",
+      "expected_book_id": 102,
+      "expected_drawer_id": "drawer_oota_darklake"
+    },
+    {
+      "id": "q08",
+      "query": "juiblex demon lord ooze slime",
+      "expected_kind": "statblock",
+      "expected_book_id": 102,
+      "expected_drawer_id": "drawer_oota_juiblex"
+    },
+    {
+      "id": "q09",
+      "query": "bugbear chief goblinoid heart strike surprise",
+      "expected_kind": "statblock",
+      "expected_book_id": 103,
+      "expected_drawer_id": "drawer_mm_bugbear_chief"
+    },
+    {
+      "id": "q10",
+      "query": "ancient white dragon breath cone arctic",
+      "expected_kind": "statblock",
+      "expected_book_id": 103,
+      "expected_drawer_id": "drawer_mm_ancient_white_dragon"
+    },
+    {
+      "id": "q11",
+      "query": "owlbear feywild bear owl claws",
+      "expected_kind": "statblock",
+      "expected_book_id": 103,
+      "expected_drawer_id": "drawer_mm_owlbear"
+    },
+    {
+      "id": "q12",
+      "query": "stone giant encounter icespire",
+      "expected_kind": "drawer",
+      "expected_book_id": 100,
+      "expected_drawer_id": "drawer_icespire_hold_entry",
+      "notes": "Off-keyword — stone giants don't appear in our drawers but the icespire entry should still be the closest match."
+    },
+    {
+      "id": "q13",
+      "query": "curse of strahd gothic horror barovia",
+      "expected_kind": "pointer",
+      "expected_book_id": 104,
+      "notes": "Strahd is intentionally not ingested; retriever must emit a pointer with a suggest_conversion payload."
+    },
+    {
+      "id": "q14",
+      "query": "faceless lord ooze demon",
+      "expected_kind": "statblock",
+      "expected_book_id": 102,
+      "expected_drawer_id": "drawer_oota_juiblex"
+    },
+    {
+      "id": "q15",
+      "query": "asian-fantasy island adventure spirits",
+      "expected_kind": "drawer",
+      "expected_book_id": 101,
+      "expected_drawer_id": "drawer_obojima_spirits"
+    }
+  ],
+  "gate_thresholds": {
+    "top3_correct_min_fraction": 0.90,
+    "pointer_suggestion_shape_required": true,
+    "fallback_allowed": false
+  }
+}
