@@ -603,6 +603,169 @@ async def generate_npc_table(docs: list[str] | None = None, model: str = "") -> 
     return await _run_script("npc_table.py", args)
 
 
+# ── RLM Phase 3: RPG retrieval tools ──────────────────────────────────────────
+#
+# These three tools expose the CampaignGenerator → MemPalace / rpglib
+# retrieval surface (Phase 2) plus the human-reviewable proposal producer
+# (Phase 3). None of them calls Claude; render pipelines deliberately go
+# through `docs/dossier_proposal.md` rather than raw retrieval output.
+
+
+def _resolve_palace_path() -> str | None:
+    """Best-effort palace path — env var, per-campaign mempalace config,
+    or None (falls through to mempalace-mcp's own resolution chain)."""
+    for key in ("MEMPALACE_PALACE_PATH", "MEMPAL_PALACE_PATH"):
+        val = os.environ.get(key)
+        if val:
+            return val
+    for key in ("palace", "palace_path"):
+        val = _mp_config.get(key)
+        if isinstance(val, str) and val:
+            return val
+    return None
+
+
+def _resolve_rpglib_db() -> str | None:
+    val = os.environ.get("RPGLIB_DB")
+    if val:
+        return val
+    val = config.get("rpglib_db")
+    if isinstance(val, str) and val:
+        return val
+    return None
+
+
+@mcp.tool()
+def rpg_search(
+    query: str,
+    limit: int = 10,
+    max_pointers: int = 5,
+    game_system: str = "",
+    product_type: str = "",
+    include_pointers: bool = True,
+    max_depth: int = 2,
+) -> str:
+    """Search rpglib + MemPalace and return the three-state retrieval result.
+
+    query              — free-text query (encounter, creature, location, …)
+    limit              — max drawer/statblock hits
+    max_pointers       — cap on pointer hits for unconverted books
+    game_system        — optional filter ("D&D 5e", "Pathfinder 2e", …)
+    product_type       — optional filter ("adventure", "bestiary", …)
+    include_pointers   — emit pointer hits for uncovered rpglib candidates
+    max_depth          — 0 = wings only, 1 = wings+rooms, 2 = full descent
+
+    This is a *retrieval* tool. Use propose_dossier to capture the result in
+    a reviewable file before letting any render pipeline consume it.
+    """
+    import json
+
+    from rpg_retriever import retrieve
+
+    try:
+        result = retrieve(
+            query,
+            palace=_resolve_palace_path(),
+            rpglib_db=Path(_resolve_rpglib_db()) if _resolve_rpglib_db() else None,
+            limit=limit,
+            max_pointers=max_pointers,
+            include_unconverted_pointers=include_pointers,
+            game_system=game_system or None,
+            product_type=product_type or None,
+            max_depth=max_depth,
+        )
+    except Exception as exc:
+        return f"Error: rpg_search failed: {exc}"
+    return json.dumps(result, indent=2, default=str)
+
+
+@mcp.tool()
+def propose_dossier(
+    query: str,
+    output: str = "",
+    limit: int = 20,
+    max_pointers: int = 5,
+    include_pointers: bool = True,
+    overwrite: bool = True,
+) -> str:
+    """Run rpg_search and write the slotted result to docs/dossier_proposal.md.
+
+    query            — free-text query (session beat, faction name, NPC, …)
+    output           — optional override path (default <campaign>/docs/dossier_proposal.md)
+    limit            — max drawer/statblock candidates
+    max_pointers     — cap on pointer suggestions
+    include_pointers — include unconverted-book pointers
+    overwrite        — replace an existing proposal; False refuses if present
+
+    Returns a short status string. The produced file is a CANDIDATES list —
+    a human has to review it, edit scope, and change the status banner away
+    from `candidates only` before any render pipeline will consume it.
+    """
+    from dossier_proposer import propose, render, write_proposal
+
+    try:
+        proposal = propose(
+            query,
+            campaign_dir=campaign_dir,
+            palace=_resolve_palace_path(),
+            rpglib_db=Path(_resolve_rpglib_db()) if _resolve_rpglib_db() else None,
+            limit=limit,
+            max_pointers=max_pointers,
+            include_unconverted_pointers=include_pointers,
+        )
+    except Exception as exc:
+        return f"Error: propose_dossier failed: {exc}"
+
+    markdown = render(proposal)
+    output_path = Path(output).expanduser() if output else campaign_dir / "docs" / "dossier_proposal.md"
+    if output_path.exists() and not overwrite:
+        return f"Refused: {output_path} already exists (pass overwrite=true)."
+    try:
+        write_proposal(markdown, output_path, overwrite=overwrite)
+    except Exception as exc:
+        return f"Error: write_proposal failed: {exc}"
+
+    slot_summary = ", ".join(
+        f"{k}={len(v)}" for k, v in proposal.slots.items() if v
+    ) or "(all slots empty)"
+    return (
+        f"Wrote {output_path} — {proposal.raw_hit_count} hits, slots: {slot_summary}.\n"
+        "Review the file, edit scope, and change the `> **Status:**` line "
+        "from `candidates only` to e.g. "
+        "`approved by <name> on <date>` before rendering."
+    )
+
+
+@mcp.tool()
+def suggest_conversion(book_id: int = 0, filepath: str = "") -> str:
+    """Build a ConversionSuggestion payload for an unconverted rpglib book.
+
+    Pass either the book_id (preferred) or the absolute filepath. Returns a
+    JSON blob with the convert_command, ingest_command, and cost estimates
+    the user can review before approving any PDF → JSON conversion.
+    """
+    import json as _json
+
+    from suggest_conversion import suggest_from_db
+
+    rpglib_db = _resolve_rpglib_db()
+    if not rpglib_db:
+        return "Error: rpglib_db not configured (set RPGLIB_DB or config.yaml:rpglib_db)."
+
+    kwargs: dict = {"db_path": Path(rpglib_db)}
+    if book_id:
+        kwargs["book_id"] = int(book_id)
+    if filepath:
+        kwargs["filepath"] = filepath
+    if "book_id" not in kwargs and "filepath" not in kwargs:
+        return "Error: pass book_id or filepath."
+
+    suggestion = suggest_from_db(**kwargs)
+    if suggestion is None:
+        return "Error: book not found in rpglib."
+    return _json.dumps(suggestion.to_dict(), indent=2, default=str)
+
+
 # ── Entry point ───────────────────────────────────────────────────────────────
 
 if __name__ == "__main__":

@@ -300,9 +300,43 @@ def main() -> None:
                         help="Save final output to file (Voice Keeper responses for pipeline, "
                              "encounter doc for single)")
     parser.add_argument("--no-log", action="store_true", help="Skip saving a log file")
+    parser.add_argument(
+        "--campaign-dir",
+        default=None,
+        help="Campaign workspace root (default: $CAMPAIGN_DIR or the config "
+             "file's parent directory). Used to locate docs/dossier_proposal.md.",
+    )
+    parser.add_argument(
+        "--require-proposal",
+        action="store_true",
+        help="Refuse to render unless <campaign-dir>/docs/dossier_proposal.md "
+             "exists and has been approved (status banner edited away from "
+             "`candidates only`). The proposal is automatically attached to "
+             "the grounding-doc bundle when present.",
+    )
     args = parser.parse_args()
 
     config, base_dir = load_config(args.config)
+
+    # Locate the campaign directory for proposal lookup. Priority:
+    #   --campaign-dir flag → $CAMPAIGN_DIR env → parent of the config file.
+    import os as _os
+
+    from proposal_loader import (
+        ProposalNotApproved,
+        ProposalRequired,
+        attach_proposal_to_documents,
+        require_approved_proposal,
+    )
+    _campaign_dir = args.campaign_dir or _os.environ.get("CAMPAIGN_DIR") or str(base_dir)
+    if args.require_proposal:
+        try:
+            require_approved_proposal(_campaign_dir)
+        except (ProposalRequired, ProposalNotApproved) as exc:
+            parser.error(str(exc))
+    # Soft-attach even without --require-proposal so an approved proposal
+    # that happens to exist flows into the user prompt for free.
+    attach_proposal_to_documents(config, _campaign_dir)
 
     if args.session is not None:
         outline = get_session_outline_from_file(args.session)
