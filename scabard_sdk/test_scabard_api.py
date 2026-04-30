@@ -148,9 +148,20 @@ def main() -> None:
             lambda: client.get_campaign(999999999),
         )
 
+    def test_list_connection_types():
+        conn_types = client.list_connection_types(args.concept)
+        assert_true("list_connection_types() returns a list", isinstance(conn_types, list))
+        assert_true("list_connection_types() is non-empty", len(conn_types) > 0)
+        first = conn_types[0]
+        for key in ("rel", "source", "target"):
+            assert_in(f"connection type entry has '{key}'", key, first)
+        print(f"         ({len(conn_types)} types; sample: "
+              f"{first.get('source')} —[{first.get('rel')}]→ {first.get('target')})")
+
     run_test("list_campaigns", test_list_campaigns)
     run_test("get_campaign", test_get_campaign)
     run_test("list_pages", test_list_pages)
+    run_test("list_connection_types", test_list_connection_types)
     run_test("invalid_campaign_id_raises", test_invalid_campaign_raises)
 
     # ── Section 3: Page lifecycle ─────────────────────────────────────────────
