@@ -142,6 +142,15 @@ def derive_campaign_paths(campaign_dir: str, session_dir: str) -> dict:
     examples = cd / "examples"
     result["examples_dir"] = str(examples) if examples.is_dir() else ""
 
+    # Party config YAML — preferred over flat character/backstory/arc-score flags
+    for rel in ("config/party.yaml", "party.yaml"):
+        p = cd / rel
+        if p.exists():
+            result["party_config"] = str(p)
+            break
+    else:
+        result["party_config"] = ""
+
     # NPC dossier files (individual files, not directory)
     npcs_dir = docs / "npcs"
     if npcs_dir.is_dir():

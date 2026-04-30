@@ -107,6 +107,7 @@ async function deriveAll() {
       campaign_state_output: d.campaign_state || '',
       world_state_output: d.world_state || '',
       party_output: d.party || '',
+      party_config_path: d.party_config || '',
       summaries: d.summaries || '',
       plan_npc: d.plan_npc || '',
       plan_context: d.plan_context || '',
