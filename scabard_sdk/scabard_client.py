@@ -329,3 +329,38 @@ class ScabardClient:
             payload,
         )
         return bool(result.get("isSuccess", False))
+
+    # ── Connection-type endpoints ─────────────────────────────────────────────
+
+    def list_connection_types(self, concept: str) -> list[dict]:
+        """Return the catalog of valid connection types for a concept.
+
+        Connection types are shared across all campaigns — the URL has no
+        campaign_id. Each entry describes a directed relationship from a
+        source concept to a target concept. Every entry returned by the
+        live API (226 sampled across character/place/event/group) included
+        ``isSymmetric``; the docs example shows it omitted on some entries,
+        so callers should treat a missing key as False defensively.
+
+        ``source`` matches the URL concept on every live entry observed
+        (e.g. ``/conntypes/character`` returns only entries with
+        ``source: "Character"``).
+
+        Args:
+            concept: Source concept (lowercase): "character", "group",
+                     "place", "event", etc.
+
+        Returns:
+            List of connection-type dicts with keys:
+              "rel"         — relationship label (e.g. "Acquaintance of")
+              "source"      — source concept, Title Case (matches URL concept)
+              "target"      — target concept, Title Case ("Event", "Place", ...)
+              "isSymmetric" — bool; treat missing as False (defensive)
+              "postParam"   — undocumented; e.g. "acquaintance_of:character".
+                              Looks like the parameter token a future
+                              connection-CRUD endpoint would accept. Not used
+                              by the SDK; surfaced here for callers who want
+                              to experiment.
+        """
+        data = self._get(f"{self.BASE_URL}/campaign/conntypes/{concept}")
+        return data.get("connTypes", [])

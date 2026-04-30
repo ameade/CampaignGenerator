@@ -114,6 +114,7 @@ async def run_distill(
 
 @router.get("/run/party")
 async def run_party(
+    party_config: str = "",
     character: list[str] = Query(default=[]),
     summaries: str = "",
     backstory: list[str] = Query(default=[]),
@@ -130,10 +131,13 @@ async def run_party(
 ):
     cmd = [python_exe(), str(SCRIPT_DIR / "party.py")]
 
-    _cmd_multi(cmd, "--character", character)
+    if party_config:
+        _cmd_opt(cmd, "--party-config", party_config)
+    else:
+        _cmd_multi(cmd, "--character", character)
+        _cmd_multi(cmd, "--backstory", backstory)
+        _cmd_multi(cmd, "--arc-scores", arc_scores)
     _cmd_opt(cmd, "--summaries", summaries)
-    _cmd_multi(cmd, "--backstory", backstory)
-    _cmd_multi(cmd, "--arc-scores", arc_scores)
     _cmd_multi(cmd, "--context", context)
     _cmd_opt(cmd, "--output", output)
     _cmd_opt(cmd, "--extract-dir", extract_dir)

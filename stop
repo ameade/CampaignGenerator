@@ -2,17 +2,24 @@
 # Stop CampaignGenerator server(s) started by ./start.
 #
 # Usage:
-#   ./stop              # stop all running instances
+#   ./stop              # stop tracked instances (via server*.pid files)
 #   ./stop --port 5000  # stop only the instance on port 5000
+#   ./stop --all        # also sweep and kill stray `python -m server.main`
+#                       # processes that no PID file knows about
+#   ./stop --all --port 5000  # sweep narrowed to processes on port 5000
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 
-# Parse --port if given
+# Parse --port and --all
 TARGET_PORT=""
+SWEEP_ALL=false
 PREV=""
 for ARG in "$@"; do
     if [ "$PREV" = "--port" ]; then
         TARGET_PORT="$ARG"
+    fi
+    if [ "$ARG" = "--all" ]; then
+        SWEEP_ALL=true
     fi
     PREV="$ARG"
 done
@@ -32,8 +39,9 @@ else
     done
 fi
 
-if [ ${#PID_FILES[@]} -eq 0 ]; then
+if [ ${#PID_FILES[@]} -eq 0 ] && ! $SWEEP_ALL; then
     echo "No PID files found — is a server running?"
+    echo "If a server was started outside ./start, try ./stop --all to sweep."
     exit 1
 fi
 
@@ -73,5 +81,61 @@ for PID_FILE in "${PID_FILES[@]}"; do
 done
 
 if ! $FOUND_ANY; then
-    echo "No running servers found."
+    echo "No tracked servers found via PID files."
+fi
+
+# Stray-process sweep only runs when --all is passed. Without --all, only
+# PID-file-tracked processes are stopped. Strays are processes started via
+# ./startup directly, or left over from a crashed ./start.
+if ! $SWEEP_ALL; then
+    # Hint the user if strays exist so they know --all is an option.
+    STRAY_COUNT="$(pgrep -c -f 'python.* -m server\.main' 2>/dev/null || echo 0)"
+    if [ "$STRAY_COUNT" -gt 0 ]; then
+        echo
+        echo "Note: $STRAY_COUNT untracked 'python -m server.main' process(es) still running."
+        echo "Run './stop --all' to sweep them too."
+    fi
+    exit 0
+fi
+
+SWEEP_PATTERN='python.* -m server\.main'
+if [ -n "$TARGET_PORT" ]; then
+    # Narrow the sweep to matches that mention the requested port.
+    SWEEP_PATTERN="python.* -m server\.main.*--port[= ]$TARGET_PORT"
+fi
+
+SELF_PID=$$
+STRAY_PIDS=()
+while IFS= read -r PID; do
+    [ -z "$PID" ] && continue
+    [ "$PID" = "$SELF_PID" ] && continue
+    STRAY_PIDS+=("$PID")
+done < <(pgrep -f "$SWEEP_PATTERN" 2>/dev/null || true)
+
+if [ ${#STRAY_PIDS[@]} -gt 0 ]; then
+    echo
+    echo "Found ${#STRAY_PIDS[@]} stray server process(es):"
+    for PID in "${STRAY_PIDS[@]}"; do
+        CMD="$(ps -p "$PID" -o args= 2>/dev/null || echo '<gone>')"
+        echo "  PID $PID: $CMD"
+    done
+
+    for PID in "${STRAY_PIDS[@]}"; do
+        echo "Stopping stray PID $PID..."
+        kill "$PID" 2>/dev/null || continue
+
+        for i in $(seq 1 10); do
+            if ! kill -0 "$PID" 2>/dev/null; then
+                echo "  Stopped."
+                break
+            fi
+            sleep 0.5
+        done
+
+        if kill -0 "$PID" 2>/dev/null; then
+            echo "  Didn't stop cleanly — sending SIGKILL."
+            kill -9 "$PID" 2>/dev/null
+            echo "  Killed."
+        fi
+    done
 fi

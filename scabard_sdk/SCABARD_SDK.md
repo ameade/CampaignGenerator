@@ -137,6 +137,37 @@ if "Grundar Quartzvein" in existing:
 
 ---
 
+### `list_connection_types(concept) → list[dict]`
+
+Returns the catalog of valid connection (relationship) types for a given concept. Connection types are shared across all campaigns — there is **no `campaign_id`** in the URL.
+
+| Parameter | Type | Description |
+|---|---|---|
+| `concept` | `str` | Source concept (lowercase): `"character"`, `"group"`, `"place"`, `"event"`, etc. |
+
+Each returned dict has these keys:
+
+| Key | Type | Description |
+|---|---|---|
+| `rel` | `str` | Relationship label (e.g. `"Acquaintance of"`, `"Steward"`) |
+| `source` | `str` | Source concept, Title Case — matches the URL concept (e.g. `"Character"` for `/conntypes/character`) |
+| `target` | `str` | Target concept, Title Case (e.g. `"Event"`, `"Place"`) |
+| `isSymmetric` | `bool` | Whether the relationship is bidirectional. Present on every live entry observed; treat missing as `False` defensively. |
+| `postParam` | `str` | Undocumented in the API reference — looks like the parameter token for a future connection-CRUD endpoint (e.g. `"acquaintance_of:character"`, `"steward_of:place"`). Not consumed by the SDK; surfaced for experimentation. |
+
+```python
+conn_types = client.list_connection_types("character")
+for ct in conn_types:
+    arrow = "↔" if ct.get("isSymmetric") else "→"
+    print(f"{ct['source']} —[{ct['rel']}]{arrow} {ct['target']}")
+# Character —[Acquaintance of]→ Character
+# Character —[Ally of]↔ Character
+# Character —[Steward of]→ Place
+# ...
+```
+
+---
+
 ### `create_page(campaign_id, concept, name, ...) → tuple[bool, int | None]`
 
 Creates a new page. Because the API does not return the new page's ID in the create response, this method re-fetches the page list to discover it.

@@ -4,9 +4,15 @@ import { useConfigStore } from '../../stores/config'
 import PathField from '../../components/shared/PathField.vue'
 import MultiPathField from '../../components/shared/MultiPathField.vue'
 import ExtractSynthesizePanel from '../../components/shared/ExtractSynthesizePanel.vue'
+import PartyConfigEditor from '../../components/shared/PartyConfigEditor.vue'
+import { resolvePathWithBase } from '../../utils/paths'
 
 const config = useConfigStore()
 
+type Mode = 'config' | 'flat'
+const mode = ref<Mode>('config')
+
+const partyConfigPath = ref('')
 const characters = ref('')
 const summaries = ref('')
 const backstory = ref('')
@@ -21,6 +27,7 @@ const showAdvanced = ref(false)
 
 function loadFromConfig() {
   const v = config.values
+  partyConfigPath.value = v.party_config_path || ''
   characters.value = v.party_chars || ''
   summaries.value = v.party_summaries || v.summaries || ''
   backstory.value = v.party_backstory || ''
@@ -30,7 +37,17 @@ function loadFromConfig() {
   extractDir.value = v.party_extract_dir || ''
   chunkSize.value = v.party_chunk_size || 60000
   splitChapters.value = v.party_split_chapters || ''
+  // Persisted mode wins; otherwise default to 'config' if a YAML path is set,
+  // else fall back to 'flat' so legacy workspaces still see the old form.
+  if (v.party_mode === 'config' || v.party_mode === 'flat') {
+    mode.value = v.party_mode
+  } else {
+    mode.value = partyConfigPath.value ? 'config' : 'flat'
+  }
 }
+
+watch(mode, (m) => { config.values.party_mode = m })
+watch(partyConfigPath, (p) => { config.values.party_config_path = p })
 
 const charFiles = computed(() =>
   characters.value.split('\n').map(l => l.trim()).filter(Boolean)
@@ -45,28 +62,42 @@ const contextFiles = computed(() =>
   context.value.split('\n').map(l => l.trim()).filter(Boolean)
 )
 
-const ready = computed(() =>
-  !!(charFiles.value.length && output.value.trim())
-)
+const ready = computed(() => {
+  if (!output.value.trim()) return false
+  return mode.value === 'config'
+    ? !!partyConfigPath.value.trim()
+    : charFiles.value.length > 0
+})
 
 // Extract phase needs summaries; the two-phase panel appends extract_only=true.
 // When the user hits Synthesize, the panel auto-adds synthesize_only=true so
 // the CLI skips the extract pass and just reads the cached files.
-const runParams = computed(() => ({
-  character: charFiles.value,
-  summaries: summaries.value,
-  backstory: backstoryFiles.value,
-  arc_scores: arcScoreFiles.value,
-  context: contextFiles.value,
-  output: output.value,
-  extract_dir: extractDir.value,
-  chunk_size: chunkSize.value,
-  split_chapters: splitChapters.value,
-  no_log: noLog.value,
-  model: config.model,
-}))
+const runParams = computed(() => {
+  const base: Record<string, unknown> = {
+    summaries: summaries.value,
+    context: contextFiles.value,
+    output: output.value,
+    extract_dir: extractDir.value,
+    chunk_size: chunkSize.value,
+    split_chapters: splitChapters.value,
+    no_log: noLog.value,
+    model: config.model,
+  }
+  if (mode.value === 'config') {
+    base.party_config = partyConfigPath.value
+  } else {
+    base.character = charFiles.value
+    base.backstory = backstoryFiles.value
+    base.arc_scores = arcScoreFiles.value
+  }
+  return base
+})
 
 const hasSummaries = computed(() => !!summaries.value.trim())
+
+const resolvedPartyConfigPath = computed(() =>
+  resolvePathWithBase(partyConfigPath.value, 'campaign')
+)
 
 watch(output, (newOutput) => {
   if (!extractDir.value && newOutput) {
@@ -89,13 +120,37 @@ onMounted(() => { loadFromConfig() })
     </div>
 
     <div class="form-grid">
-      <!-- Required: character sheets -->
-      <div class="form-section">
+      <!-- Input mode toggle -->
+      <div class="form-section mode-section">
+        <label class="field-label">Input mode</label>
+        <div class="mode-toggle">
+          <label class="radio-label">
+            <input type="radio" value="config" v-model="mode" />
+            Party config YAML
+            <span class="mode-hint">— preferred; explicit per-PC mapping with first-class trackless support</span>
+          </label>
+          <label class="radio-label">
+            <input type="radio" value="flat" v-model="mode" />
+            Flat file lists
+            <span class="mode-hint">— legacy; one file per line for sheets / backstories / arc scores</span>
+          </label>
+        </div>
+      </div>
+
+      <!-- Party config YAML (mode = config) -->
+      <div v-if="mode === 'config'" class="form-section">
+        <PathField v-model="partyConfigPath" label="Party config file" required resolve-base="campaign"
+          help="Path to party.yaml. Maps each PC to their sheet, backstory, and arc_score (use null for trackless). See config/party.example.yaml." />
+        <PartyConfigEditor :config-path="resolvedPartyConfigPath" />
+      </div>
+
+      <!-- Required: character sheets (mode = flat) -->
+      <div v-else class="form-section">
         <MultiPathField v-model="characters" label="Character sheet files" required resolve-base="campaign"
           help="One character sheet per line (e.g. docs/characters/soma.md). Required." />
       </div>
 
-      <!-- Summaries -->
+      <!-- Summaries (both modes) -->
       <div class="form-section">
         <PathField v-model="summaries" label="Session summaries file" resolve-base="campaign"
           help="Optional. Omit to skip the Extract pass (characters-only mode)." />
@@ -112,12 +167,16 @@ onMounted(() => { loadFromConfig() })
           help="party.md — roster, arc scores, relationships." />
       </div>
 
-      <!-- Optional inputs -->
-      <div class="form-section">
+      <!-- Optional inputs (flat mode only) -->
+      <div v-if="mode === 'flat'" class="form-section">
         <MultiPathField v-model="backstory" label="Backstory files" resolve-base="campaign"
           help="One per line. Optional backstory documents for each character." />
         <MultiPathField v-model="arcScores" label="Arc score mechanic files" resolve-base="campaign"
           help="One per line. Arc score documents, one per character." />
+      </div>
+
+      <!-- Context (both modes) -->
+      <div class="form-section">
         <MultiPathField v-model="context" label="Additional context files" resolve-base="campaign"
           help="e.g. campaign_state.md — optional extra context for synthesis." />
       </div>
@@ -175,6 +234,15 @@ onMounted(() => { loadFromConfig() })
   border-bottom: 1px solid var(--bg-surface0);
 }
 .form-section:last-child { border-bottom: none; }
+
+.mode-section { display: flex; flex-direction: column; gap: 6px; }
+.mode-toggle { display: flex; flex-direction: column; gap: 4px; }
+.radio-label {
+  font-size: 11px; color: var(--text-sub);
+  display: flex; align-items: center; gap: 6px; cursor: pointer;
+}
+.radio-label input { accent-color: var(--mauve); }
+.mode-hint { color: var(--text-muted); font-weight: 400; }
 
 .field { margin-bottom: 10px; }
 .field-label {

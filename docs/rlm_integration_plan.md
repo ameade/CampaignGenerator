@@ -199,14 +199,13 @@ When `rpg_retriever` finds a candidate book that rpglib knows about but MemPalac
 - `tests/benchmarks/hierarchical_aaak.json` (~15 generic palace queries)
 - `mempalace_room_indices` + `mempalace_wing_indices` collections (schema addition)
 
-**Modified (4 files):**
+**Modified (6 files):**
 - `mempalace/searcher.py` — `search_within` primitive
 - `mempalace/palace.py` — collection accessors + dirty-flag plumbing
 - `mempalace/dialect.py` — rank-bucketed projection helpers exposed
 - `mempalace/mcp_server.py` — `tool_search_hierarchical` handler + registration
 - `mempalace/layers.py` — optional `max_depth=0` path (Phase 3)
-
-(The earlier `config.py` startup-warning item is removed: it was a WSL2-specific DrvFs footgun that doesn't exist on a Linux VM.)
+- `mempalace/config.py` — startup warning when `~/.mempalace` resolves onto a non-ext4 / DrvFs / 9P path (`/mnt/c/…`, `/mnt/d/…`). One warn log on palace open; no-op on `/mnt/data` and `$HOME`.
 
 **Reused unchanged:**
 - `mempalace/palace.py::build_closet_lines / purge_file_closets / upsert_closet_lines / mine_lock / file_already_mined`
@@ -239,17 +238,16 @@ Each gate runs its repo's benchmark. Do not start phase N+1 before gate N passes
 
 ### Phase 0 — Host + baselines (~1 week)
 
-- **Host decision (settled).** All four tools (rpglib, pdf-translators, MemPalace, CampaignGenerator) run inside a **Linux VM on the desktop**, not WSL2. The VM gets a right-sized virtual disk (ext4 throughout); no DrvFs, no 9P, no vhdx-mount-into-WSL gymnastics. ChromaDB and SQLite run on a real Linux filesystem with native semantics.
-- **Palace location.** `~/.mempalace/` is just a directory on the VM's disk. No symlinks, no mounts. Size the VM disk to accommodate the palace (50 GB is plenty) plus whatever local storage the corpus access strategy requires (see below).
-- **Corpus (the 2 TB of PDFs) access — open decision, not blocking Phase 0.** Three viable patterns; choose whichever simplifies storage most:
-  - *Rclone mount* (`rclone mount gdrive: /mnt/gdrive --vfs-cache-mode full`) — the cleanest Linux-native Google Drive access. Sequential reads are fine for pdf-translators's one-time conversion pass.
-  - *Host-share over SMB/NFS* — mount the Windows host's Google-Drive-mirrored folder into the VM. Works if the desktop stays on.
-  - *Local mirror inside the VM* — give the VM enough disk for the corpus itself (2 TB VM disk). Overkill for most users; only if the VM will outlive the desktop's current Drive setup.
-  The retriever/ingest code is corpus-location-agnostic (it gets filepaths from rpglib, opens files at those paths); any of the three works.
-- **Dropped from Phase 0:** the earlier DrvFs-startup-warning deliverable in MemPalace's `config.py` is removed — it was a WSL2-specific footgun that doesn't exist on a native Linux VM.
-- **Benchmarks checked in.** ~15 generic palace queries in MemPalace; ~15 RPG queries in CampaignGenerator. Baseline numbers (flat AAAK, book-level-only retrieval) recorded on the VM.
+- **Host decision (settled).** All four tools (rpglib, pdf-translators, MemPalace, CampaignGenerator) run inside **WSL2**. Storage-critical state (MemPalace palace, ChromaDB, SQLite, rpglib DB, pdf-translators outputs) lives on a **dedicated 80 GB VHD mounted at `/mnt/data`** formatted as ext4. From WSL2's perspective this is native Linux filesystem — no DrvFs, no 9P crossing, correct `mmap` / `fsync` / `flock` semantics. The VHD sidesteps every footgun the original VM plan was trying to avoid, without the VM overhead.
+- **Palace location.** `~/.mempalace/` is a symlink (or bind mount) into `/mnt/data/mempalace/`. 80 GB is enough for the palace plus rpglib DB (79 MB) plus pdf-translators JSON outputs with healthy headroom.
+- **Corpus (the 2 TB of PDFs) access — open decision, not blocking Phase 0.** Two viable patterns; the corpus itself is **not** copied onto `/mnt/data` (80 GB can't hold 2 TB). Access it in place:
+  - *Rclone mount* (`rclone mount gdrive: /mnt/gdrive --vfs-cache-mode full`) — Linux-native Google Drive access inside WSL2. Sequential reads are fine for pdf-translators's one-time conversion pass.
+  - *Windows Drive mirror via `/mnt/g/`* — the existing path. Read-only access; pdf-translators opens files directly. Works as-is.
+  The retriever/ingest code is corpus-location-agnostic (it gets filepaths from rpglib, opens files at those paths); either pattern works.
+- **DrvFs startup warning (in scope).** Users may still misconfigure `~/.mempalace` onto `/mnt/c/` or another DrvFs path. MemPalace's `config.py` gets a startup check that warns when the palace resolves onto a non-ext4 / DrvFs / 9P path. No-op on `/mnt/data` and `$HOME`.
+- **Benchmarks checked in.** ~15 generic palace queries in MemPalace; ~15 RPG queries in CampaignGenerator. Baseline numbers (flat AAAK, book-level-only retrieval) recorded against the VHD-backed palace.
 
-**Gate 0:** VM provisioned; corpus-access strategy chosen and working; two benchmark sets committed; baseline numbers on record.
+**Gate 0:** VHD mounted at `/mnt/data` and `~/.mempalace` relocated onto it; palace + Chroma operate on `/mnt/data` with correct `flock` + `fsync` + `mmap` behavior verified by smoke test; corpus-access strategy chosen and working; two benchmark sets committed; baseline numbers on record.
 
 ### Phase 1 — MemPalace sub-plan: hierarchical AAAK (~2–3 weeks, MemPalace repo)
 
@@ -297,15 +295,15 @@ Only if/when you convert a much larger fraction of the 14 K-book library.
 
 ## Storage architecture
 
-All four tools run inside a **Linux VM on the desktop**. Rationale: WSL2's storage model (DrvFs / 9P / vhdx mounts) kept adding complexity every time the corpus grew or the palace performance requirements tightened. A native Linux VM gives one uniform ext4 filesystem with correct mmap / fsync / lock semantics throughout — no bridge layer.
+All four tools run inside **WSL2**, with storage-critical state on a **dedicated 80 GB VHD mounted at `/mnt/data`** (ext4). Rationale: WSL2's DrvFs / 9P bridge layers are what create the footguns — `/mnt/c/` hosts do not give correct `mmap` / `fsync` / `flock` semantics for ChromaDB and SQLite. A VHD is native Linux filesystem from WSL2's perspective, so the bridge layer is simply not in the path. This achieves the same correctness the VM plan was reaching for, without the VM.
 
-- **Palace:** `~/.mempalace/` on the VM's disk. 50 GB of VM disk is plenty for MemPalace state across all palaces.
-- **Source PDFs (2 TB on Google Drive):** accessed via one of the three patterns in Phase 0 (rclone mount, host SMB/NFS share, or local VM mirror). Read-only by pdf-translators; never touched by MemPalace.
-- **rpglib DB:** moves into the VM alongside its code. CampaignGenerator reads via rpglib's MCP, never directly.
-- **pdf-translators outputs:** anywhere on the VM filesystem the user chooses. `fivetools_ingest.py` takes explicit paths.
-- **CampaignGenerator workspaces:** unchanged conceptually. `docs/dossier_proposal.md` joins the existing grounding-doc family inside each campaign workspace directory.
+- **Palace:** `~/.mempalace/` is a symlink (or bind mount) into `/mnt/data/mempalace/`. 80 GB covers all MemPalace state comfortably.
+- **Source PDFs (2 TB on Google Drive):** accessed in place via rclone mount or the existing `/mnt/g/` Windows Drive mirror. **Not copied onto `/mnt/data`** — 80 GB can't hold them. Read-only by pdf-translators; never touched by MemPalace.
+- **rpglib DB:** `/mnt/data/` (79 MB). CampaignGenerator reads via rpglib's MCP, never directly.
+- **pdf-translators outputs:** `/mnt/data/`. `fivetools_ingest.py` takes explicit paths.
+- **CampaignGenerator workspaces:** `/mnt/data/` for anything sharing Chroma/SQLite state; workspaces that are purely doc-scale can stay in `$HOME`. `docs/dossier_proposal.md` joins the existing grounding-doc family inside each campaign workspace directory.
 
-No WSL-specific concerns remain: no DrvFs, no `/mnt/c/` vs `/mnt/wsl/` distinctions, no `wsl --mount --vhd`, no symlink fiddling. The VM is a normal Linux host.
+The DrvFs footguns the original plan feared apply *only* if the palace lands on `/mnt/c/` (or another DrvFs mount). Putting it on a dedicated VHD at `/mnt/data` takes WSL2's bridge layer out of the path entirely — no VM required. MemPalace's `config.py` keeps a startup warning for the misconfiguration case (palace resolving onto DrvFs / 9P).
 
 ---
 
@@ -320,6 +318,7 @@ Ordered by load-bearingness.
 5. **Bestiary wing de-duplication.** A creature in multiple sourcebooks generates one statblock drawer per source. Intentional — different sources have different stat blocks for the "same" creature. Mitigation: always include `source` in bestiary result metadata.
 6. **Orchestrator over-trust of AAAK paths.** Claude may treat a returned AAAK path as authoritative without opening drawers. Mitigation: `tool_search_hierarchical` default return format includes top drawer text alongside the path.
 7. **Pointer fatigue.** If a query surfaces 40 pointers and 3 drawers, result is noise. Mitigation: CampaignGenerator-side default pointer limit (top 5 by rpglib relevance); `include_unconverted_pointers=false` flag.
+8. **VHD exhaustion.** Palace + ChromaDB + rpglib DB + pdf-translators outputs all share the 80 GB `/mnt/data` VHD. The 2 TB corpus is accessed in place, not copied, so the dominant growth is the palace itself (proportional to how much of rpglib gets converted). Mitigation: Gate 0 includes a disk-usage smoke test; a startup warning fires when `/mnt/data` is >80% full. Fallback is growing the VHD (WSL2 supports online resize via `wsl --manage … --resize`).
 
 ---
 
