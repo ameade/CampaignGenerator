@@ -1,17 +1,26 @@
 """
-fivetools_ingest.py — push a pdf-translators 5etools JSON into MemPalace.
+fivetools_ingest.py — push a 5etools JSON file into MemPalace.
 
-This is the Phase 2 ingest CLI called out in the RLM integration plan.
-The flow is intentionally explicit (never automatic):
+The 5etools schema covers two distinct document shapes:
 
-    1. user runs convert_book.py on a PDF
-    2. user reviews the JSON in adventure_editor / toc_editor
-    3. user runs this script to push the approved JSON into MemPalace
+* **Adventure / book** — ``{data: [{type:"section", entries:[...]}]}``
+  (chapters, scenes, prose, inline statblocks). pdf-translators
+  outputs this shape.
+* **Catalog** — ``{monster:[...], spell:[...], item:[...], class:[...],
+  ...}`` keyed by entity wrapper key. Canonical 5etools repository
+  files (``bestiary-mm.json``, ``spells-phb.json``, …) use this shape.
 
-Each typed entry in the JSON becomes one drawer:
+Each top-level entity becomes one drawer:
 
-    * statblocks    → wing_bestiary / room_<sanitized-book-title>
-    * prose / section / inset / quote / table → wing_rpglib / room_<sanitized-book-title>
+    * monster / vehicle / object → wing_bestiary
+    * spell / psionic            → wing_spells
+    * item / itemGroup / baseitem / magicvariant / reward → wing_items
+    * class / subclass / classFeature / subclassFeature   → wing_classes
+    * race / subrace / background / feat / deity → wing_lore
+    * variantrule / condition / disease / status / action → wing_rules
+    * adventure prose (sections / scenes / etc.)          → wing_rpglib
+    * statblocks inside adventure prose                   → wing_bestiary
+    * *Fluff entries                                      → wing_lore
 
 Book-level metadata (book_id, display_title, publisher, game_system,
 product_type, tags, series) is snapshot-copied from ``rpg_library.db``
@@ -26,6 +35,9 @@ previous ingest of this book before re-adding.
 
 Usage:
     python fivetools_ingest.py path/to/adventure.json
+    python fivetools_ingest.py path/to/bestiary-mm.json
+    python fivetools_ingest.py path/to/bestiary-mm.json --filter "name=Drow Priestess of Lolth"
+    python fivetools_ingest.py path/to/bestiary-mm.json --filter "name=Drow,source=MM"
     python fivetools_ingest.py path/to/adventure.json --palace /path/to/palace
     python fivetools_ingest.py path/to/adventure.json --book-id 7421
     python fivetools_ingest.py path/to/adventure.json --force
@@ -49,6 +61,9 @@ from typing import Any, Iterator
 
 from mempalace_client import MempalaceClient
 
+import fivetools_copy
+import fivetools_render
+
 logger = logging.getLogger(__name__)
 
 
@@ -56,10 +71,12 @@ logger = logging.getLogger(__name__)
 
 _DEFAULT_RPGLIB_DB = Path.home() / "src" / "mytools" / "rpg-lib" / "rpg_library.db"
 _DEFAULT_PDF_TRANSLATORS = Path.home() / "src" / "5etools-kostadis" / "pdf-translators"
+_DEFAULT_FIVETOOLS_DATA_ROOT = Path.home() / "src" / "5etools-kostadis" / "data"
 _STATE_DIRNAME = ".fivetools_ingest"
 _STATE_VERSION = 1
 
-# Entry types we ingest. Unknown types are skipped with a debug log.
+# Entry types we ingest from adventure-shape docs. Unknown types are
+# skipped with a debug log.
 _STATBLOCK_TYPES = {"statblock", "statblockInline"}
 _PROSE_CONTAINER_TYPES = {
     "section",
@@ -72,6 +89,65 @@ _PROSE_CONTAINER_TYPES = {
 }
 _PROSE_LEAF_TYPES = {"p", "paragraph", "quote"}
 _TABLE_TYPES = {"table", "tableGroup"}
+
+
+# Catalog wrapper-key → MemPalace wing routing. Anything not listed and
+# not ending in "Fluff" falls through to ``wing_lore`` (with a warning).
+_WRAPPER_KEY_WINGS = {
+    "monster": "wing_bestiary",
+    "vehicle": "wing_bestiary",
+    "object": "wing_bestiary",
+    "spell": "wing_spells",
+    "psionic": "wing_spells",
+    "item": "wing_items",
+    "itemGroup": "wing_items",
+    "baseitem": "wing_items",
+    "magicvariant": "wing_items",
+    "reward": "wing_items",
+    "class": "wing_classes",
+    "subclass": "wing_classes",
+    "classFeature": "wing_classes",
+    "subclassFeature": "wing_classes",
+    "optionalfeature": "wing_classes",
+    "race": "wing_lore",
+    "subrace": "wing_lore",
+    "background": "wing_lore",
+    "feat": "wing_lore",
+    "deity": "wing_lore",
+    "charoption": "wing_lore",
+    "variantrule": "wing_rules",
+    "condition": "wing_rules",
+    "disease": "wing_rules",
+    "status": "wing_rules",
+    "action": "wing_rules",
+    "sense": "wing_rules",
+    "skill": "wing_rules",
+    "trap": "wing_rules",
+    "hazard": "wing_rules",
+    "language": "wing_rules",
+}
+
+# Top-level keys that are not entities (filter from catalog dispatch).
+_NON_ENTITY_TOP_KEYS = {
+    "_meta",
+    "adventure",
+    "book",
+    "monsterTemplate",
+    "monsterTemplateGroup",
+    "_xtraData",
+    "_test",
+}
+
+# Wrapper keys that ship inside larger items.json / items-base.json
+# files but aren't independent entities for ingest purposes.
+_SKIPPED_CATALOG_KEYS = {
+    "itemProperty",
+    "itemType",
+    "itemTypeAdditionalEntries",
+    "itemEntry",
+    "itemMastery",
+    "linkedLootTables",
+}
 
 
 # ── Validation hook into pdf-translators ─────────────────────────────────
@@ -104,6 +180,19 @@ def validate_adventure_json(raw: dict, module_root: Path, strict: bool = False) 
     mod.parse_document(raw, ctx=ctx)
     errs = getattr(ctx.result, "errors", None) or []
     return [str(e) for e in errs]
+
+
+def validate_doc(raw: Any, kind: str, module_root: Path, strict: bool = False) -> list[str]:
+    """Kind-aware validation dispatch.
+
+    ``adventure`` shapes go through pdf-translators' adventure_model.
+    ``catalog`` shapes have no Python-side validator yet — the JSON
+    Schemas live in ``5etools-kostadis/node_modules/5etools-utils/lib/
+    schema/`` but porting them is deferred (Batch B in the audit).
+    """
+    if kind == "adventure":
+        return validate_adventure_json(raw, module_root, strict=strict)
+    return []
 
 
 # ── rpglib lookup (direct SQLite — read-only) ────────────────────────────
@@ -182,11 +271,88 @@ def lookup_book(
     return data
 
 
-# ── Entry walk ───────────────────────────────────────────────────────────
+# ── Document shape detection ─────────────────────────────────────────────
+
+_ADVENTURE_SECTION_TYPES = {
+    "section", "entries", "inset", "insetReadaloud", "p", "paragraph", "quote",
+    "variantInner", "variantBlock",
+}
 
 
-def _iter_top_level_entries(doc: dict) -> Iterator[dict]:
-    """Yield every top-level 5etools entry regardless of doc shape.
+def detect_doc_kind(raw: Any) -> str:
+    """Return ``"adventure"``, ``"catalog"``, or ``"unknown"``.
+
+    A doc is **adventure** when it carries ``adventureData[]`` (homebrew)
+    OR ``data[]`` whose elements look like sections/prose. A doc is
+    **catalog** when its top-level keys include any of the known
+    wrapper keys (``monster``, ``spell``, ``item``, …). Some files
+    contain both shapes (rare); precedence: adventure > catalog.
+    """
+    if isinstance(raw, list):
+        return "adventure"
+    if not isinstance(raw, dict):
+        return "unknown"
+
+    if isinstance(raw.get("adventureData"), list):
+        return "adventure"
+
+    data = raw.get("data")
+    if isinstance(data, list) and data:
+        if any(
+            isinstance(d, dict) and (d.get("type") in _ADVENTURE_SECTION_TYPES or "entries" in d)
+            for d in data
+        ):
+            return "adventure"
+
+    if (
+        isinstance(raw.get("entries"), list)
+        and "data" not in raw
+        and "adventureData" not in raw
+    ):
+        return "adventure"
+
+    for k in raw.keys():
+        if k in _WRAPPER_KEY_WINGS or k.endswith("Fluff"):
+            return "catalog"
+
+    return "unknown"
+
+
+def iter_catalog_entities(raw: dict) -> Iterator[tuple[str, dict]]:
+    """Yield ``(wrapper_key, entity)`` for every top-level catalog entity.
+
+    Skips ``_meta`` and other non-entity tops, and skips wrapper keys
+    that aren't independently ingestable (item properties, type tags).
+    """
+    if not isinstance(raw, dict):
+        return
+    for k, v in raw.items():
+        if k in _NON_ENTITY_TOP_KEYS or k in _SKIPPED_CATALOG_KEYS:
+            continue
+        if not isinstance(v, list):
+            continue
+        if k not in _WRAPPER_KEY_WINGS and not k.endswith("Fluff"):
+            # Skip unknown top-level lists silently — there are several
+            # configuration arrays at the root of items.json etc.
+            continue
+        for ent in v:
+            if isinstance(ent, dict):
+                yield (k, ent)
+
+
+def wing_for_wrapper_key(prop: str) -> str:
+    if prop in _WRAPPER_KEY_WINGS:
+        return _WRAPPER_KEY_WINGS[prop]
+    if prop.endswith("Fluff"):
+        return "wing_lore"
+    return "wing_lore"
+
+
+# ── Adventure entry walk (existing, preserved) ───────────────────────────
+
+
+def _iter_top_level_entries(doc: Any) -> Iterator[dict]:
+    """Yield every top-level adventure entry regardless of doc shape.
 
     The two observed shapes:
         * Homebrew: ``{"adventure": [...index...], "adventureData": [{"data": [...]}]}``
@@ -279,23 +445,148 @@ def build_drawer(
         "source_filepath": source_filepath,
     }
     if book:
-        metadata.update(
-            {
-                "book_id": int(book["id"]),
-                "display_title": book.get("pdf_title") or book.get("filename") or "",
-                "publisher": book.get("publisher") or "",
-                "game_system": book.get("game_system") or "",
-                "product_type": book.get("product_type") or "",
-                "series": book.get("series") or "",
-                "tags": ";".join(book["tags"]) if isinstance(book.get("tags"), list) else "",
-            }
-        )
+        metadata.update(_book_metadata(book))
     if is_statblock:
         metadata["statblock_name"] = name or ""
         metadata["statblock_source"] = entry.get("source") or ""
         metadata["statblock_tag"] = entry.get("tag") or ""
 
     return {"wing": wing, "room": room, "content": content, "metadata": metadata}
+
+
+def _book_metadata(book: dict) -> dict[str, Any]:
+    return {
+        "book_id": int(book["id"]),
+        "display_title": book.get("pdf_title") or book.get("filename") or "",
+        "publisher": book.get("publisher") or "",
+        "game_system": book.get("game_system") or "",
+        "product_type": book.get("product_type") or "",
+        "series": book.get("series") or "",
+        "tags": ";".join(book["tags"]) if isinstance(book.get("tags"), list) else "",
+    }
+
+
+def build_drawer_catalog(
+    prop: str,
+    entity: dict,
+    *,
+    book: dict | None,
+    room_slug: str,
+    source_filepath: str,
+) -> dict | None:
+    """Convert one catalog entity (monster / spell / item / …) into a
+    drawer-ready dict, or ``None`` to skip.
+
+    The drawer's ``wing`` is determined by the wrapper key; ``content``
+    is rendered via :mod:`fivetools_render`; ``metadata`` carries
+    everything a hierarchical AAAK descent (and downstream filtering)
+    needs to do its job — entity name, source, page, CR / level / etc.
+    """
+    if not isinstance(entity, dict):
+        return None
+    name = entity.get("name") if isinstance(entity.get("name"), str) else None
+    if not name:
+        return None
+    content = fivetools_render.render_entity(prop, entity)
+    if not content:
+        return None
+
+    wing = wing_for_wrapper_key(prop)
+    room = f"room_{room_slug}"
+    page = entity.get("page") if isinstance(entity.get("page"), int) else None
+    source = entity.get("source") or ""
+
+    metadata: dict[str, Any] = {
+        "entry_type": prop,
+        "wrapper_key": prop,
+        "section_name": name,
+        "section_path": "",
+        "page": int(page) if page is not None else -1,
+        "source_filepath": source_filepath,
+        "entity_name": name,
+        "entity_source": source,
+    }
+    if book:
+        metadata.update(_book_metadata(book))
+
+    # Per-type facets — small, scalar-only metadata that hierarchical
+    # AAAK can route on. Anything richer is in the rendered content.
+    metadata.update(_catalog_facets(prop, entity))
+
+    return {"wing": wing, "room": room, "content": content, "metadata": metadata}
+
+
+def _catalog_facets(prop: str, e: dict) -> dict[str, Any]:
+    out: dict[str, Any] = {}
+    if prop == "monster":
+        out["statblock_name"] = e.get("name") or ""
+        out["statblock_source"] = e.get("source") or ""
+        out["statblock_tag"] = "creature"
+        cr = e.get("cr")
+        if isinstance(cr, (str, int, float)):
+            out["cr"] = str(cr)
+        elif isinstance(cr, dict) and "cr" in cr:
+            out["cr"] = str(cr["cr"])
+        t = e.get("type")
+        if isinstance(t, str):
+            out["creature_type"] = t
+        elif isinstance(t, dict) and isinstance(t.get("type"), str):
+            out["creature_type"] = t["type"]
+        sizes = e.get("size")
+        if isinstance(sizes, list) and sizes:
+            out["size"] = sizes[0]
+    elif prop == "spell":
+        if isinstance(e.get("level"), int):
+            out["spell_level"] = e["level"]
+        if isinstance(e.get("school"), str):
+            out["spell_school"] = e["school"]
+    elif prop in ("class", "subclass", "classFeature", "subclassFeature"):
+        if isinstance(e.get("className"), str):
+            out["class_name"] = e["className"]
+        if isinstance(e.get("level"), int):
+            out["class_level"] = e["level"]
+    elif prop in ("item", "baseitem", "itemGroup", "magicvariant"):
+        if isinstance(e.get("rarity"), str):
+            out["item_rarity"] = e["rarity"]
+        if isinstance(e.get("type"), str):
+            out["item_type"] = e["type"]
+    return out
+
+
+# ── Catalog filtering ────────────────────────────────────────────────────
+
+
+def parse_filter_spec(spec: str | None) -> dict[str, str]:
+    """Parse ``"name=Drow,source=MM"`` into ``{"name": "Drow", "source": "MM"}``.
+
+    Comma-separated key=value pairs. Whitespace around tokens is
+    stripped. Empty spec → empty dict (matches everything).
+    """
+    if not spec:
+        return {}
+    out: dict[str, str] = {}
+    for token in spec.split(","):
+        token = token.strip()
+        if not token:
+            continue
+        if "=" not in token:
+            raise ValueError(f"--filter token {token!r} missing '='")
+        k, v = token.split("=", 1)
+        out[k.strip()] = v.strip()
+    return out
+
+
+def matches_filter(entity: dict, filters: dict[str, str]) -> bool:
+    """All-keys-must-match (AND) string-equality filter."""
+    if not filters:
+        return True
+    for k, expected in filters.items():
+        actual = entity.get(k)
+        if not isinstance(actual, str):
+            actual = "" if actual is None else str(actual)
+        if actual.strip().lower() != expected.strip().lower():
+            return False
+    return True
 
 
 def _render_entry_content(entry: dict, entry_type: str | None, name: str | None, page) -> str:
@@ -390,13 +681,64 @@ def file_signature(json_path: Path) -> dict:
 
 
 def build_drawers_from_json(
-    raw: dict,
+    raw: Any,
+    *,
+    book: dict | None,
+    book_room_slug: str,
+    source_filepath: str,
+    kind: str | None = None,
+    filters: dict[str, str] | None = None,
+    data_root: Path | None = None,
+    json_path: Path | None = None,
+) -> list[dict]:
+    """Walk a 5etools JSON document and return every drawer-ready dict.
+
+    Dispatches on ``kind`` — adventure-shaped docs go through the
+    section/scene walker; catalog-shaped docs iterate every wrapper-key
+    list, optionally apply ``filters``, resolve ``_copy`` references,
+    and route each entity through :func:`build_drawer_catalog`.
+    """
+    if kind is None:
+        kind = detect_doc_kind(raw)
+
+    if kind == "adventure":
+        if filters:
+            logger.info(
+                "fivetools_ingest: --filter is ignored for adventure-shape docs "
+                "(walks the section tree, not entity-keyed lists)"
+            )
+        return _build_drawers_adventure(
+            raw,
+            book=book,
+            book_room_slug=book_room_slug,
+            source_filepath=source_filepath,
+        )
+
+    if kind == "catalog":
+        return _build_drawers_catalog(
+            raw,
+            book=book,
+            room_slug=book_room_slug,
+            source_filepath=source_filepath,
+            filters=filters or {},
+            data_root=data_root,
+            json_path=json_path,
+        )
+
+    logger.warning(
+        "fivetools_ingest: unknown document shape (no adventure or catalog "
+        "wrapper keys at top level); no drawers built"
+    )
+    return []
+
+
+def _build_drawers_adventure(
+    raw: Any,
     *,
     book: dict | None,
     book_room_slug: str,
     source_filepath: str,
 ) -> list[dict]:
-    """Walk the adventure JSON and return every drawer-ready dict."""
     drawers: list[dict] = []
     for top in _iter_top_level_entries(raw):
         for node, path in _walk_entries(top):
@@ -412,6 +754,104 @@ def build_drawers_from_json(
     return drawers
 
 
+def _build_drawers_catalog(
+    raw: dict,
+    *,
+    book: dict | None,
+    room_slug: str,
+    source_filepath: str,
+    filters: dict[str, str],
+    data_root: Path | None,
+    json_path: Path | None,
+) -> list[dict]:
+    """Build drawers for every catalog entity in the doc.
+
+    Pipeline per wrapper key:
+
+    1. Collect every entity for that key.
+    2. Optionally apply ``filters`` (drops non-matching entities early).
+    3. Resolve ``_copy`` references — same-file pool first, then
+       cross-file dependencies via ``_meta.dependencies`` if a data
+       root is available.
+    4. Route each entity through :func:`build_drawer_catalog`.
+    """
+    if not isinstance(raw, dict):
+        return []
+
+    by_prop: dict[str, list[dict]] = {}
+    for prop, entity in iter_catalog_entities(raw):
+        by_prop.setdefault(prop, []).append(entity)
+
+    drawers: list[dict] = []
+    auto_data_root = data_root or _autodetect_data_root(json_path)
+
+    for prop, entities in by_prop.items():
+        # Filtering happens BEFORE _copy resolution so we don't load
+        # dependency files for entities we're about to drop.
+        if filters:
+            kept = [e for e in entities if matches_filter(e, filters)]
+        else:
+            kept = list(entities)
+
+        if not kept:
+            continue
+
+        # _copy resolution. We pass the *full* same-file list as the
+        # primary parent pool so a kept entity that copies from a
+        # filtered-out sibling still resolves.
+        needs_copy = any("_copy" in e for e in kept)
+        if needs_copy:
+            extra_pool: list[dict] = []
+            if auto_data_root is not None:
+                try:
+                    extra_pool = fivetools_copy.load_dependency_pool(
+                        raw, prop=prop, data_root=auto_data_root
+                    )
+                except Exception as exc:  # noqa: BLE001
+                    logger.warning("dependency load failed for prop %r: %s", prop, exc)
+            try:
+                fivetools_copy.resolve_copies(
+                    # Resolve over the *kept* list, but seed the pool
+                    # with every same-file entity (kept or not) so
+                    # internal copies don't break.
+                    kept,
+                    prop=prop,
+                    extra_pool=list(entities) + extra_pool,
+                )
+            except Exception as exc:  # noqa: BLE001
+                logger.warning("_copy resolution failed for prop %r: %s", prop, exc)
+
+        for entity in kept:
+            d = build_drawer_catalog(
+                prop,
+                entity,
+                book=book,
+                room_slug=room_slug,
+                source_filepath=source_filepath,
+            )
+            if d is not None:
+                drawers.append(d)
+
+    return drawers
+
+
+def _autodetect_data_root(json_path: Path | None) -> Path | None:
+    """Walk up from ``json_path`` to find a directory whose basename is
+    ``data`` (the canonical 5etools data root). Falls back to the
+    package default when nothing is found.
+    """
+    if json_path is None:
+        return _DEFAULT_FIVETOOLS_DATA_ROOT if _DEFAULT_FIVETOOLS_DATA_ROOT.is_dir() else None
+    p = json_path.resolve().parent
+    for _ in range(8):  # bounded walk
+        if p.name == "data" and p.is_dir():
+            return p
+        if p.parent == p:
+            break
+        p = p.parent
+    return _DEFAULT_FIVETOOLS_DATA_ROOT if _DEFAULT_FIVETOOLS_DATA_ROOT.is_dir() else None
+
+
 def ingest_file(
     json_path: Path,
     *,
@@ -424,17 +864,23 @@ def ingest_file(
     replace: bool = False,
     dry_run: bool = False,
     strict: bool = False,
+    filters: dict[str, str] | None = None,
+    data_root: Path | None = None,
 ) -> dict:
-    """Ingest one adventure JSON. Returns a report dict."""
+    """Ingest one 5etools JSON. Returns a report dict."""
     if not json_path.is_file():
         raise SystemExit(f"fivetools_ingest: {json_path} is not a file")
 
     sig = file_signature(json_path)
     prior = read_state(json_path)
+    # Filters change the drawer set, so cache hit must include them.
+    cur_filter_key = json.dumps(filters or {}, sort_keys=True)
+    prior_filter_key = (prior or {}).get("filter_key", "{}") if prior else "{}"
     if prior and not force:
         if (
             prior.get("size") == sig["size"]
             and abs(prior.get("mtime", -1) - sig["mtime"]) < 0.001
+            and prior_filter_key == cur_filter_key
         ):
             logger.info("fivetools_ingest: %s unchanged since last ingest (skip)", json_path)
             return {
@@ -445,7 +891,8 @@ def ingest_file(
             }
 
     raw = json.loads(json_path.read_text(encoding="utf-8"))
-    errors = validate_adventure_json(raw, pdf_translators, strict=strict)
+    kind = detect_doc_kind(raw)
+    errors = validate_doc(raw, kind, pdf_translators, strict=strict)
     if errors:
         logger.warning(
             "fivetools_ingest: %d validation issue(s) in %s (ingesting anyway)",
@@ -453,10 +900,12 @@ def ingest_file(
             json_path,
         )
 
-    # Locate the source PDF + rpglib metadata.
+    # Locate the source PDF + rpglib metadata. Catalog files (the 5e
+    # repo's own JSONs) usually have no associated PDF — the
+    # source_filepath then falls back to the JSON itself, and the
+    # rpglib lookup gracefully returns None.
     source_filepath = raw.get("_meta", {}).get("sourceFilepath") if isinstance(raw, dict) else None
     if not source_filepath:
-        # Best-effort fallback: the JSON usually lives alongside the PDF.
         candidate = json_path.with_suffix(".pdf")
         source_filepath = str(candidate) if candidate.exists() else str(json_path)
 
@@ -464,7 +913,7 @@ def ingest_file(
     display_title = (
         (book or {}).get("pdf_title")
         or (book or {}).get("filename")
-        or raw.get("_meta", {}).get("title")
+        or (raw.get("_meta", {}).get("title") if isinstance(raw, dict) else None)
         or json_path.stem
     )
     book_room_slug = sanitize_room_slug(display_title)
@@ -474,12 +923,17 @@ def ingest_file(
         book=book,
         book_room_slug=book_room_slug,
         source_filepath=source_filepath,
+        kind=kind,
+        filters=filters,
+        data_root=data_root,
+        json_path=json_path,
     )
 
     if dry_run:
         return {
             "status": "dry-run",
             "json_path": str(json_path),
+            "kind": kind,
             "book_room_slug": book_room_slug,
             "book": book,
             "validation_errors": errors,
@@ -520,12 +974,15 @@ def ingest_file(
         "book_id": (book or {}).get("id"),
         "drawer_count": len(drawers),
         "ingested_at": time.strftime("%Y-%m-%dT%H:%M:%S"),
+        "kind": kind,
+        "filter_key": cur_filter_key,
     }
     write_state(json_path, state_payload)
 
     return {
         "status": "ingested",
         "json_path": str(json_path),
+        "kind": kind,
         "book_room_slug": book_room_slug,
         "book_id": (book or {}).get("id"),
         "drawer_count": len(drawers),
@@ -561,6 +1018,25 @@ def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         help=f"Path to the pdf-translators checkout (default {_DEFAULT_PDF_TRANSLATORS}).",
     )
     parser.add_argument(
+        "--fivetools-data-root",
+        type=Path,
+        default=None,
+        help=(
+            "Path to the 5etools data tree (used for cross-file _copy "
+            "dependency resolution). Auto-detected from json_path when "
+            f"omitted; default {_DEFAULT_FIVETOOLS_DATA_ROOT}."
+        ),
+    )
+    parser.add_argument(
+        "--filter",
+        default=None,
+        help=(
+            "Comma-separated key=value pairs to select a subset of "
+            "catalog entities (e.g. \"name=Drow,source=MM\"). Ignored "
+            "for adventure-shape docs."
+        ),
+    )
+    parser.add_argument(
         "--force",
         action="store_true",
         help="Re-ingest even if the JSON is unchanged since last run.",
@@ -590,6 +1066,10 @@ def main(argv: list[str] | None = None) -> int:
         level=logging.DEBUG if args.verbose else logging.INFO,
         format="%(levelname)s %(name)s: %(message)s",
     )
+    try:
+        filters = parse_filter_spec(args.filter)
+    except ValueError as exc:
+        raise SystemExit(f"fivetools_ingest: {exc}")
     report = ingest_file(
         args.json_path,
         palace=args.palace,
@@ -600,6 +1080,8 @@ def main(argv: list[str] | None = None) -> int:
         replace=args.replace,
         dry_run=args.dry_run,
         strict=args.strict,
+        filters=filters,
+        data_root=args.fivetools_data_root,
     )
     print(json.dumps(report, indent=2, default=str))
     return 0

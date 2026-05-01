@@ -313,6 +313,304 @@ def test_dry_run_does_not_call_client(homebrew_doc, tmp_path, monkeypatch):
     assert fake.calls == []
 
 
+# ── Wrapper-key dispatch ─────────────────────────────────────────────────
+
+
+class TestDetectDocKind:
+    def test_adventure_via_data_with_sections(self):
+        doc = {"data": [{"type": "section", "name": "Ch1", "entries": []}]}
+        assert fti.detect_doc_kind(doc) == "adventure"
+
+    def test_adventure_via_adventureData(self):
+        doc = {
+            "adventure": [{"id": "i"}],
+            "adventureData": [{"data": [{"type": "section", "name": "x", "entries": []}]}],
+        }
+        assert fti.detect_doc_kind(doc) == "adventure"
+
+    def test_catalog_via_monster_key(self):
+        doc = {"_meta": {}, "monster": [{"name": "Goblin", "source": "MM"}]}
+        assert fti.detect_doc_kind(doc) == "catalog"
+
+    def test_catalog_via_class_key(self):
+        doc = {"_meta": {}, "class": [{"name": "Fighter"}],
+               "subclass": [{"name": "Champion"}]}
+        assert fti.detect_doc_kind(doc) == "catalog"
+
+    def test_unknown_when_nothing_matches(self):
+        assert fti.detect_doc_kind({"randomKey": [1, 2, 3]}) == "unknown"
+
+
+class TestIterCatalogEntities:
+    def test_yields_each_entity_with_prop(self):
+        doc = {
+            "_meta": {},
+            "monster": [{"name": "Goblin"}, {"name": "Orc"}],
+            "spell": [{"name": "Fireball"}],
+        }
+        items = list(fti.iter_catalog_entities(doc))
+        keys = sorted((p, e["name"]) for p, e in items)
+        assert keys == [("monster", "Goblin"), ("monster", "Orc"), ("spell", "Fireball")]
+
+    def test_skips_meta_and_index_keys(self):
+        doc = {
+            "_meta": {"dependencies": {}},
+            "adventure": [{"id": "x"}],  # adventure index, not entities
+            "monster": [{"name": "G"}],
+        }
+        items = list(fti.iter_catalog_entities(doc))
+        assert items == [("monster", {"name": "G"})]
+
+    def test_skips_item_property_internal_keys(self):
+        doc = {
+            "_meta": {}, "item": [{"name": "Bag"}],
+            "itemProperty": [{"abbreviation": "F"}],  # internal table; not ingested
+        }
+        items = list(fti.iter_catalog_entities(doc))
+        assert items == [("item", {"name": "Bag"})]
+
+
+class TestWingForWrapperKey:
+    def test_known_keys(self):
+        assert fti.wing_for_wrapper_key("monster") == "wing_bestiary"
+        assert fti.wing_for_wrapper_key("spell") == "wing_spells"
+        assert fti.wing_for_wrapper_key("class") == "wing_classes"
+        assert fti.wing_for_wrapper_key("race") == "wing_lore"
+        assert fti.wing_for_wrapper_key("variantrule") == "wing_rules"
+
+    def test_fluff_routes_to_lore(self):
+        assert fti.wing_for_wrapper_key("monsterFluff") == "wing_lore"
+        assert fti.wing_for_wrapper_key("spellFluff") == "wing_lore"
+
+
+class TestBuildDrawerCatalog:
+    def test_monster_drawer_full_metadata(self):
+        m = {
+            "name": "Goblin", "source": "MM", "page": 166,
+            "size": ["S"], "type": "humanoid", "alignment": ["N", "E"],
+            "ac": [{"ac": 15}], "hp": {"average": 7, "formula": "2d6"},
+            "speed": {"walk": 30},
+            "str": 8, "dex": 14, "con": 10, "int": 10, "wis": 8, "cha": 8,
+            "cr": "1/4",
+            "action": [{"name": "Scimitar", "entries": ["+4 to hit"]}],
+        }
+        drawer = fti.build_drawer_catalog(
+            "monster", m, book=None, room_slug="dnd5e", source_filepath="/x/bestiary-mm.json",
+        )
+        assert drawer["wing"] == "wing_bestiary"
+        assert drawer["room"] == "room_dnd5e"
+        md = drawer["metadata"]
+        assert md["wrapper_key"] == "monster"
+        assert md["entity_name"] == "Goblin"
+        assert md["entity_source"] == "MM"
+        assert md["page"] == 166
+        assert md["cr"] == "1/4"
+        assert md["creature_type"] == "humanoid"
+        assert md["size"] == "S"
+        assert md["statblock_name"] == "Goblin"
+        assert "# Goblin" in drawer["content"]
+        assert "**Armor Class** 15" in drawer["content"]
+        assert "## Actions" in drawer["content"]
+
+    def test_spell_drawer_facets(self):
+        s = {
+            "name": "Mage Hand", "source": "PHB", "level": 0, "school": "T",
+            "time": [{"number": 1, "unit": "action"}],
+            "range": {"type": "point", "distance": {"type": "feet", "amount": 30}},
+            "components": {"v": True, "s": True},
+            "duration": [{"type": "timed", "duration": {"number": 1, "type": "minute"}}],
+            "entries": ["A spectral hand appears."],
+        }
+        d = fti.build_drawer_catalog(
+            "spell", s, book=None, room_slug="dnd5e", source_filepath="/x/spells.json",
+        )
+        assert d["wing"] == "wing_spells"
+        assert d["metadata"]["spell_level"] == 0
+        assert d["metadata"]["spell_school"] == "T"
+
+    def test_unnamed_entity_returns_none(self):
+        d = fti.build_drawer_catalog(
+            "monster", {"source": "MM"}, book=None, room_slug="x", source_filepath="/x",
+        )
+        assert d is None
+
+
+class TestParseFilterSpec:
+    def test_empty(self):
+        assert fti.parse_filter_spec(None) == {}
+        assert fti.parse_filter_spec("") == {}
+
+    def test_single_pair(self):
+        assert fti.parse_filter_spec("name=Drow") == {"name": "Drow"}
+
+    def test_multiple_pairs_strip_whitespace(self):
+        assert fti.parse_filter_spec("name=Drow,source=MM") == {"name": "Drow", "source": "MM"}
+        assert fti.parse_filter_spec(" name = Drow , source = MM ") == {"name": "Drow", "source": "MM"}
+
+    def test_missing_equals_raises(self):
+        with pytest.raises(ValueError):
+            fti.parse_filter_spec("name")
+
+
+class TestMatchesFilter:
+    def test_no_filters_passes_all(self):
+        assert fti.matches_filter({"name": "X"}, {})
+
+    def test_exact_match_case_insensitive(self):
+        assert fti.matches_filter({"name": "drow"}, {"name": "Drow"})
+        assert fti.matches_filter({"name": "Drow"}, {"name": "drow"})
+
+    def test_and_semantics_all_must_match(self):
+        assert fti.matches_filter({"name": "X", "source": "MM"}, {"name": "X", "source": "MM"})
+        assert not fti.matches_filter({"name": "X", "source": "MM"}, {"name": "X", "source": "PHB"})
+
+
+@pytest.fixture
+def catalog_doc(tmp_path: Path) -> Path:
+    """A minimal catalog-shaped JSON: 2 monsters + 1 spell."""
+    doc = {
+        "_meta": {},
+        "monster": [
+            {
+                "name": "Goblin", "source": "MM", "page": 166,
+                "size": ["S"], "type": "humanoid", "alignment": ["N", "E"],
+                "ac": [{"ac": 15}], "hp": {"average": 7, "formula": "2d6"},
+                "speed": {"walk": 30},
+                "str": 8, "dex": 14, "con": 10, "int": 10, "wis": 8, "cha": 8,
+                "cr": "1/4",
+                "action": [{"name": "Scimitar", "entries": ["+4 to hit"]}],
+            },
+            {
+                "name": "Orc", "source": "MM", "page": 246,
+                "size": ["M"], "type": "humanoid", "alignment": ["C", "E"],
+                "ac": [{"ac": 13}], "hp": {"average": 15, "formula": "2d8"},
+                "speed": {"walk": 30},
+                "str": 16, "dex": 12, "con": 16, "int": 7, "wis": 11, "cha": 10,
+                "cr": "1/2",
+                "action": [{"name": "Greataxe", "entries": ["+5 to hit"]}],
+            },
+        ],
+        "spell": [
+            {
+                "name": "Mage Hand", "source": "PHB",
+                "level": 0, "school": "T",
+                "time": [{"number": 1, "unit": "action"}],
+                "range": {"type": "point", "distance": {"type": "feet", "amount": 30}},
+                "components": {"v": True, "s": True},
+                "duration": [{"type": "timed", "duration": {"number": 1, "type": "minute"}}],
+                "entries": ["A spectral hand appears."],
+            }
+        ],
+    }
+    p = tmp_path / "bestiary-mini.json"
+    p.write_text(json.dumps(doc), encoding="utf-8")
+    return p
+
+
+def test_catalog_ingest_routes_to_correct_wings(catalog_doc, tmp_path, monkeypatch):
+    fake = FakeMempalaceClient()
+    monkeypatch.setattr(fti, "lookup_book", lambda db, book_id=None, filepath=None: None)
+    report = fti.ingest_file(
+        catalog_doc, palace=None, book_id=None,
+        rpglib_db=tmp_path / "fake.db",
+        pdf_translators=tmp_path / "fake_pdf",
+        mp_client=fake,
+    )
+    assert report["status"] == "ingested"
+    assert report["kind"] == "catalog"
+    wings = sorted(c["arguments"]["wing"] for c in fake.calls)
+    assert wings == ["wing_bestiary", "wing_bestiary", "wing_spells"]
+    # All drawers go to the same room (book_room_slug is the JSON stem when
+    # there's no rpglib book).
+    rooms = {c["arguments"]["room"] for c in fake.calls}
+    assert rooms == {"room_bestiary-mini"}
+
+
+def test_catalog_filter_drops_non_matching(catalog_doc, tmp_path, monkeypatch):
+    fake = FakeMempalaceClient()
+    monkeypatch.setattr(fti, "lookup_book", lambda db, book_id=None, filepath=None: None)
+    report = fti.ingest_file(
+        catalog_doc, palace=None, book_id=None,
+        rpglib_db=tmp_path / "fake.db",
+        pdf_translators=tmp_path / "fake_pdf",
+        mp_client=fake,
+        filters={"name": "Goblin"},
+    )
+    assert report["drawer_count"] == 1
+    assert len(fake.calls) == 1
+    assert fake.calls[0]["arguments"]["metadata"]["entity_name"] == "Goblin"
+
+
+def test_catalog_full_statblock_in_content(catalog_doc, tmp_path, monkeypatch):
+    """The headline Step-1 fix: catalog-shaped statblocks are no longer
+    skeletal name-only blobs."""
+    fake = FakeMempalaceClient()
+    monkeypatch.setattr(fti, "lookup_book", lambda db, book_id=None, filepath=None: None)
+    fti.ingest_file(
+        catalog_doc, palace=None, book_id=None,
+        rpglib_db=tmp_path / "fake.db",
+        pdf_translators=tmp_path / "fake_pdf",
+        mp_client=fake,
+        filters={"name": "Goblin"},
+    )
+    content = fake.calls[0]["arguments"]["content"]
+    assert "# Goblin" in content
+    assert "**Armor Class** 15" in content
+    assert "**Hit Points** 7" in content
+    assert "## Actions" in content
+    assert "**Scimitar.**" in content
+
+
+def test_catalog_filter_changes_idempotence_key(catalog_doc, tmp_path, monkeypatch):
+    """Different --filter on the same file must NOT be treated as a no-op."""
+    fake = FakeMempalaceClient()
+    monkeypatch.setattr(fti, "lookup_book", lambda db, book_id=None, filepath=None: None)
+
+    fti.ingest_file(
+        catalog_doc, palace=None, book_id=None,
+        rpglib_db=tmp_path / "fake.db",
+        pdf_translators=tmp_path / "fake_pdf",
+        mp_client=fake,
+        filters={"name": "Goblin"},
+    )
+    n_first = len(fake.calls)
+
+    # Different filter → must still ingest, not return "unchanged".
+    r2 = fti.ingest_file(
+        catalog_doc, palace=None, book_id=None,
+        rpglib_db=tmp_path / "fake.db",
+        pdf_translators=tmp_path / "fake_pdf",
+        mp_client=fake,
+        filters={"name": "Orc"},
+    )
+    assert r2["status"] == "ingested"
+    assert len(fake.calls) == n_first + 1
+
+
+def test_catalog_validator_does_not_invoke_pdf_translators(catalog_doc, tmp_path, monkeypatch):
+    """Catalog shapes shouldn't even try to load adventure_model — it only
+    knows the adventure schema. Regression: previously this raised."""
+    fake = FakeMempalaceClient()
+    monkeypatch.setattr(fti, "lookup_book", lambda db, book_id=None, filepath=None: None)
+    called = []
+
+    def _boom(*args, **kwargs):
+        called.append(args)
+        raise RuntimeError("adventure_model should not be loaded for catalog files")
+
+    monkeypatch.setattr(fti, "validate_adventure_json", _boom)
+    fti.ingest_file(
+        catalog_doc, palace=None, book_id=None,
+        rpglib_db=tmp_path / "fake.db",
+        pdf_translators=tmp_path / "fake_pdf",
+        mp_client=fake,
+    )
+    assert called == []  # never invoked for catalog shape
+
+
+# ── Existing rpglib metadata test (unchanged) ────────────────────────────
+
+
 def test_ingest_uses_rpglib_metadata(homebrew_doc, tmp_path, monkeypatch):
     fake = FakeMempalaceClient()
     stub_book = {
