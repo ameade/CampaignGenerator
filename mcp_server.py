@@ -625,35 +625,79 @@ def _resolve_palace_path() -> str | None:
     return None
 
 
-def _resolve_rpglib_db() -> str | None:
-    val = os.environ.get("RPGLIB_DB")
+def _resolve_rpg_library_url() -> str:
+    """Resolve the rpg-library HTTP base URL — env var, config, or default."""
+    val = os.environ.get("RPG_LIBRARY_URL")
     if val:
         return val
-    val = config.get("rpglib_db")
+    val = config.get("rpg_library_url")
     if isinstance(val, str) and val:
         return val
+    return "http://localhost:8000"
+
+
+def _resolve_fivetools_data_root() -> Path | None:
+    """Resolve the 5etools-canonical data root — env var, config, or None."""
+    val = os.environ.get("FIVETOOLS_DATA_ROOT")
+    if val:
+        return Path(val).expanduser()
+    val = config.get("fivetools_data_root")
+    if isinstance(val, str) and val:
+        return Path(val).expanduser()
     return None
 
 
 @mcp.tool()
 def rpg_search(
-    query: str,
+    query: str = "",
     limit: int = 10,
-    max_pointers: int = 5,
+    k_cheap: int = 10,
+    k_expensive: int = 10,
+    include_cheap: bool = True,
+    include_expensive: bool = True,
     game_system: str = "",
     product_type: str = "",
-    include_pointers: bool = True,
+    source: str = "",
+    book_id: int = 0,
+    file_path: str = "",
+    pin_filter: str = "",
+    palace: str = "",
     max_depth: int = 2,
 ) -> str:
-    """Search rpglib + MemPalace and return the three-state retrieval result.
+    """Search MemPalace + 5etools-canonical + rpg-library; return tiered hits.
 
-    query              — free-text query (encounter, creature, location, …)
-    limit              — max drawer/statblock hits
-    max_pointers       — cap on pointer hits for unconverted books
-    game_system        — optional filter ("D&D 5e", "Pathfinder 2e", …)
-    product_type       — optional filter ("adventure", "bestiary", …)
-    include_pointers   — emit pointer hits for uncovered rpglib candidates
-    max_depth          — 0 = wings only, 1 = wings+rooms, 2 = full descent
+    Tiered retrieval result:
+      * drawer / statblock — already-ingested MemPalace content.
+      * candidate (cost: cheap)     — 5etools JSON on disk; one-line
+        ingest via fivetools_ingest.py.
+      * candidate (cost: expensive) — rpg-library PDF needing
+        pdf_to_5etools_v2.py conversion + ingest.
+
+    Modes:
+      * Mode A — pass `query`. Searches all sources.
+      * Mode B — pass `query` plus `source` (5etools source code like
+        "MM"/"OotA") to scope the cheap pool, OR `book_id` to scope the
+        expensive pool.
+      * Mode C — leave `query` empty; pass `file_path` (+ optional
+        `pin_filter` like "name=Drow Priestess of Lolth" or "chapter=0")
+        for a cheap pin, OR `book_id` for an expensive pin.
+
+    Args:
+      query             — free-text query (Mode A / Mode B with scope).
+      limit             — max drawer/statblock hits (tier 1).
+      k_cheap           — max cheap candidates emitted (tier 2).
+      k_expensive       — max expensive candidates emitted (tier 3).
+      include_cheap     — set False to suppress tier 2 entirely.
+      include_expensive — set False to suppress tier 3 entirely.
+      game_system       — optional filter ("D&D 5e", "Pathfinder 2e", …).
+      product_type      — optional filter ("adventure", "bestiary", …).
+      source            — optional cheap-pool 5etools source scope.
+      book_id           — optional expensive-pool scope or pin.
+      file_path         — Mode C cheap pin: 5etools JSON to ingest.
+      pin_filter        — Mode C cheap pin: filter spec
+                          ("name=X[,source=Y]" or "chapter=N").
+      palace            — override the active campaign palace name.
+      max_depth         — 0 = wings only, 1 = wings+rooms, 2 = full descent.
 
     This is a *retrieval* tool. Use propose_dossier to capture the result in
     a reviewable file before letting any render pipeline consume it.
@@ -665,13 +709,20 @@ def rpg_search(
     try:
         result = retrieve(
             query,
-            palace=_resolve_palace_path(),
-            rpglib_db=Path(_resolve_rpglib_db()) if _resolve_rpglib_db() else None,
+            palace=palace or _resolve_palace_path(),
+            rpg_library_url=_resolve_rpg_library_url(),
+            fivetools_data_root=_resolve_fivetools_data_root(),
             limit=limit,
-            max_pointers=max_pointers,
-            include_unconverted_pointers=include_pointers,
+            k_cheap=k_cheap,
+            k_expensive=k_expensive,
+            include_cheap=include_cheap,
+            include_expensive=include_expensive,
             game_system=game_system or None,
             product_type=product_type or None,
+            source=source or None,
+            book_id=book_id or None,
+            file_path=file_path or None,
+            pin_filter=pin_filter or None,
             max_depth=max_depth,
         )
     except Exception as exc:
@@ -684,18 +735,22 @@ def propose_dossier(
     query: str,
     output: str = "",
     limit: int = 20,
-    max_pointers: int = 5,
-    include_pointers: bool = True,
+    k_cheap: int = 10,
+    k_expensive: int = 5,
+    include_cheap: bool = True,
+    include_expensive: bool = True,
     overwrite: bool = True,
 ) -> str:
     """Run rpg_search and write the slotted result to docs/dossier_proposal.md.
 
-    query            — free-text query (session beat, faction name, NPC, …)
-    output           — optional override path (default <campaign>/docs/dossier_proposal.md)
-    limit            — max drawer/statblock candidates
-    max_pointers     — cap on pointer suggestions
-    include_pointers — include unconverted-book pointers
-    overwrite        — replace an existing proposal; False refuses if present
+    query              — free-text query (session beat, faction name, NPC, …)
+    output             — optional override path (default <campaign>/docs/dossier_proposal.md)
+    limit              — max drawer/statblock candidates
+    k_cheap            — max cheap candidates (5etools-canonical hits)
+    k_expensive        — max expensive candidates (rpg-library PDFs)
+    include_cheap      — set False to suppress cheap candidates
+    include_expensive  — set False to suppress expensive candidates
+    overwrite          — replace an existing proposal; False refuses if present
 
     Returns a short status string. The produced file is a CANDIDATES list —
     a human has to review it, edit scope, and change the status banner away
@@ -708,10 +763,13 @@ def propose_dossier(
             query,
             campaign_dir=campaign_dir,
             palace=_resolve_palace_path(),
-            rpglib_db=Path(_resolve_rpglib_db()) if _resolve_rpglib_db() else None,
+            rpg_library_url=_resolve_rpg_library_url(),
+            fivetools_data_root=_resolve_fivetools_data_root(),
             limit=limit,
-            max_pointers=max_pointers,
-            include_unconverted_pointers=include_pointers,
+            k_cheap=k_cheap,
+            k_expensive=k_expensive,
+            include_cheap=include_cheap,
+            include_expensive=include_expensive,
         )
     except Exception as exc:
         return f"Error: propose_dossier failed: {exc}"
@@ -740,29 +798,40 @@ def propose_dossier(
 def suggest_conversion(book_id: int = 0, filepath: str = "") -> str:
     """Build a ConversionSuggestion payload for an unconverted rpglib book.
 
-    Pass either the book_id (preferred) or the absolute filepath. Returns a
-    JSON blob with the convert_command, ingest_command, and cost estimates
-    the user can review before approving any PDF → JSON conversion.
+    Pass either book_id (preferred) or the absolute filepath. Hits the
+    rpg-library HTTP API (book lookup → /api/library/book/{id} or
+    search by filepath) and returns the JSON convert+ingest command pair
+    plus cost estimate.
     """
     import json as _json
 
-    from suggest_conversion import suggest_from_db
+    from rpg_retriever import _http_get_json
+    from suggest_conversion import build_suggestion
 
-    rpglib_db = _resolve_rpglib_db()
-    if not rpglib_db:
-        return "Error: rpglib_db not configured (set RPGLIB_DB or config.yaml:rpglib_db)."
+    base_url = _resolve_rpg_library_url().rstrip("/")
+    palace = _resolve_palace_path()
 
-    kwargs: dict = {"db_path": Path(rpglib_db)}
+    book: dict | None = None
     if book_id:
-        kwargs["book_id"] = int(book_id)
-    if filepath:
-        kwargs["filepath"] = filepath
-    if "book_id" not in kwargs and "filepath" not in kwargs:
-        return "Error: pass book_id or filepath."
+        book = _http_get_json(f"{base_url}/api/library/book/{int(book_id)}")
+    if book is None and filepath:
+        # rpg-library /search doesn't support exact filepath matching directly;
+        # fall back to a substring search by filename and post-filter.
+        from urllib.parse import urlencode
+        stem = Path(filepath).name
+        result = _http_get_json(
+            f"{base_url}/api/library/search?{urlencode({'q': stem, 'per_page': '20'})}"
+        )
+        if isinstance(result, dict):
+            for row in result.get("results", []) or []:
+                if isinstance(row, dict) and row.get("filepath") == filepath:
+                    book = row
+                    break
 
-    suggestion = suggest_from_db(**kwargs)
-    if suggestion is None:
-        return "Error: book not found in rpglib."
+    if not book or not book.get("filepath"):
+        return "Error: book not found via rpg-library API (check book_id/filepath, server running at " + base_url + ")."
+
+    suggestion = build_suggestion(book, palace=palace)
     return _json.dumps(suggestion.to_dict(), indent=2, default=str)
 
 

@@ -702,16 +702,12 @@ def build_drawers_from_json(
         kind = detect_doc_kind(raw)
 
     if kind == "adventure":
-        if filters:
-            logger.info(
-                "fivetools_ingest: --filter is ignored for adventure-shape docs "
-                "(walks the section tree, not entity-keyed lists)"
-            )
         return _build_drawers_adventure(
             raw,
             book=book,
             book_room_slug=book_room_slug,
             source_filepath=source_filepath,
+            filters=filters or {},
         )
 
     if kind == "catalog":
@@ -738,9 +734,32 @@ def _build_drawers_adventure(
     book: dict | None,
     book_room_slug: str,
     source_filepath: str,
+    filters: dict[str, str] | None = None,
 ) -> list[dict]:
+    chapter_ordinal: int | None = None
+    unsupported: list[str] = []
+    for k, v in (filters or {}).items():
+        if k == "chapter":
+            try:
+                chapter_ordinal = int(str(v).strip())
+            except (TypeError, ValueError):
+                raise ValueError(
+                    f"--filter chapter={v!r} is not an integer ordinal "
+                    "(use the chapter_ordinal fivetools_catalog records)"
+                )
+        else:
+            unsupported.append(k)
+    if unsupported:
+        logger.warning(
+            "fivetools_ingest: filter key(s) %s ignored for adventure-shape docs "
+            "(use chapter=<ordinal>); supported keys: chapter",
+            ", ".join(repr(k) for k in unsupported),
+        )
+
     drawers: list[dict] = []
-    for top in _iter_top_level_entries(raw):
+    for ordinal, top in enumerate(_iter_top_level_entries(raw)):
+        if chapter_ordinal is not None and ordinal != chapter_ordinal:
+            continue
         for node, path in _walk_entries(top):
             d = build_drawer(
                 node,

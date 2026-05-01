@@ -18,9 +18,13 @@ import dossier_proposer as dp
 
 
 class TestClassify:
-    def test_pointer_hit_classifies_as_conversion(self):
-        hit = {"kind": "pointer", "drawer_text": "whatever"}
-        assert dp.classify(hit) == "conversion"
+    def test_cheap_candidate_classifies_as_ingest_cheap(self):
+        hit = {"kind": "candidate", "cost": "cheap", "drawer_text": "whatever"}
+        assert dp.classify(hit) == "ingest_cheap"
+
+    def test_expensive_candidate_classifies_as_ingest_expensive(self):
+        hit = {"kind": "candidate", "cost": "expensive", "drawer_text": "whatever"}
+        assert dp.classify(hit) == "ingest_expensive"
 
     def test_statblock_kind_wins(self):
         hit = {"kind": "statblock", "drawer_text": "# Dragon\ntag: creature"}
@@ -108,25 +112,43 @@ class TestBuildCandidate:
         assert c.page == 7
         assert c.excerpt.startswith("Prose about")
 
-    def test_pointer_carries_conversion_hint(self):
+    def test_expensive_candidate_carries_conversion_hint(self):
         hit = {
-            "kind": "pointer",
+            "kind": "candidate",
+            "cost": "expensive",
             "book_id": 9,
             "title": "Something",
-            "suggest_conversion": {
-                "convert_command": ["py", "convert_book.py", "/x.pdf"],
-                "ingest_command": ["py", "fivetools_ingest.py", "/x.json"],
-                "estimated_cost_tokens": 10000,
-                "estimated_cost_usd_min": 0.01,
-                "estimated_cost_usd_max": 0.03,
-                "notes": ["bestiary flag"],
-            },
+            "convert_command": ["py", "pdf_to_5etools_v2.py", "/x.pdf"],
+            "ingest_command": ["py", "fivetools_ingest.py", "/x.json"],
+            "estimated_cost_tokens": 10000,
+            "estimated_cost_usd_min": 0.01,
+            "estimated_cost_usd_max": 0.03,
+            "notes": ["bestiary flag"],
         }
         c = dp.build_candidate(hit)
-        assert c.slot == "conversion"
+        assert c.slot == "ingest_expensive"
+        assert c.conversion_hint["cost"] == "expensive"
         assert c.conversion_hint["convert_command"][0] == "py"
         assert c.conversion_hint["estimated_cost_tokens"] == 10000
         assert c.conversion_hint["notes"] == ["bestiary flag"]
+
+    def test_cheap_candidate_carries_ingest_hint(self):
+        hit = {
+            "kind": "candidate",
+            "cost": "cheap",
+            "name": "Drow Priestess of Lolth",
+            "entity_type": "monster",
+            "source": "MM",
+            "file_path": "/d/bestiary-mm.json",
+            "ingest_command": ["py", "fivetools_ingest.py",
+                               "/d/bestiary-mm.json", "--filter",
+                               "name=Drow Priestess of Lolth,source=MM"],
+        }
+        c = dp.build_candidate(hit)
+        assert c.slot == "ingest_cheap"
+        assert c.conversion_hint["cost"] == "cheap"
+        assert c.conversion_hint["file_path"] == "/d/bestiary-mm.json"
+        assert "--filter" in c.conversion_hint["ingest_command"]
 
     def test_group_candidates_fills_all_slots(self):
         hits = [
@@ -140,8 +162,11 @@ class TestBuildCandidate:
              "drawer_text": "Generic lore about the stars."},
             {"kind": "statblock", "drawer_text": "# Dragon\ntag: creature",
              "statblock_name": "Dragon"},
-            {"kind": "pointer", "book_id": 1, "title": "P",
-             "suggest_conversion": {"convert_command": [], "ingest_command": []}},
+            {"kind": "candidate", "cost": "expensive", "book_id": 1, "title": "P",
+             "convert_command": [], "ingest_command": []},
+            {"kind": "candidate", "cost": "cheap",
+             "name": "Goblin", "entity_type": "monster", "source": "MM",
+             "file_path": "/d/m.json", "ingest_command": []},
         ]
         slots = dp.group_candidates(hits)
         assert len(slots["location"]) == 1
@@ -149,7 +174,8 @@ class TestBuildCandidate:
         assert len(slots["npc"]) == 1
         assert len(slots["lore"]) == 1
         assert len(slots["statblock"]) == 1
-        assert len(slots["conversion"]) == 1
+        assert len(slots["ingest_expensive"]) == 1
+        assert len(slots["ingest_cheap"]) == 1
 
 
 # ── render() ─────────────────────────────────────────────────────────────
@@ -163,7 +189,7 @@ class TestRender:
             palace=None,
             rpglib_db=None,
             generated_at="2026-01-01T00:00:00",
-            slots={k: [] for k in ("npc", "location", "encounter", "statblock", "lore", "conversion")},
+            slots={k: [] for k in ("npc", "location", "encounter", "statblock", "lore", "ingest_cheap", "ingest_expensive")},
             raw_hit_count=0,
             fallback=False,
             fallback_reason=None,
@@ -193,7 +219,7 @@ class TestRender:
             generated_at="t",
             slots={
                 "npc": [], "location": [c], "encounter": [], "statblock": [],
-                "lore": [], "conversion": [],
+                "lore": [], "ingest_cheap": [], "ingest_expensive": [],
             },
             raw_hit_count=1,
             fallback=False,
@@ -205,15 +231,16 @@ class TestRender:
         assert "page**: 42" in md
         assert "> A windswept keep above the pass." in md
 
-    def test_conversion_candidate_renders_commands(self):
+    def test_expensive_candidate_renders_commands(self):
         c = dp.Candidate(
-            slot="conversion",
+            slot="ingest_expensive",
             label="Some Book",
             excerpt="",
-            kind="pointer",
+            kind="candidate",
             book_id=99,
             conversion_hint={
-                "convert_command": ["python3", "convert_book.py", "/mnt/g/x.pdf"],
+                "cost": "expensive",
+                "convert_command": ["python3", "pdf_to_5etools_v2.py", "/mnt/g/x.pdf"],
                 "ingest_command": ["python3", "fivetools_ingest.py", "/mnt/g/x.json"],
                 "estimated_cost_tokens": 12345,
                 "estimated_cost_usd_min": 0.01,
@@ -229,16 +256,46 @@ class TestRender:
             generated_at="t",
             slots={
                 "npc": [], "location": [], "encounter": [], "statblock": [],
-                "lore": [], "conversion": [c],
+                "lore": [], "ingest_cheap": [], "ingest_expensive": [c],
             },
             raw_hit_count=0,
             fallback=False,
             fallback_reason=None,
         )
         md = dp.render(proposal)
-        assert "convert_book.py /mnt/g/x.pdf" in md
+        assert "pdf_to_5etools_v2.py /mnt/g/x.pdf" in md
         assert "fivetools_ingest.py /mnt/g/x.json" in md
         assert "~12,345 tokens" in md
+
+    def test_cheap_candidate_renders_ingest_command(self):
+        c = dp.Candidate(
+            slot="ingest_cheap",
+            label="Drow Priestess of Lolth",
+            excerpt="",
+            kind="candidate",
+            conversion_hint={
+                "cost": "cheap",
+                "ingest_command": ["py", "fivetools_ingest.py",
+                                   "/d/bestiary-mm.json", "--filter",
+                                   "name=Drow Priestess of Lolth,source=MM"],
+                "file_path": "/d/bestiary-mm.json",
+                "entity_type": "monster",
+                "name": "Drow Priestess of Lolth",
+                "source": "MM",
+                "notes": [],
+            },
+        )
+        proposal = dp.Proposal(
+            query="q", campaign_dir="/x", palace=None, rpglib_db=None,
+            generated_at="t",
+            slots={"npc": [], "location": [], "encounter": [], "statblock": [],
+                   "lore": [], "ingest_cheap": [c], "ingest_expensive": []},
+            raw_hit_count=0, fallback=False, fallback_reason=None,
+        )
+        md = dp.render(proposal)
+        assert "fivetools_ingest.py /d/bestiary-mm.json" in md
+        assert "name=Drow Priestess of Lolth" in md
+        assert "cheap ingest" in md
 
 
 # ── is_approved() ────────────────────────────────────────────────────────
@@ -283,21 +340,20 @@ def test_propose_bundles_slots_and_metadata(tmp_path):
         {"kind": "statblock", "drawer_text": "# Dragon", "statblock_name": "Dragon"},
         {"kind": "drawer", "entry_type": "section",
          "drawer_text": "The icy keep towers above the bay."},
-        {"kind": "pointer", "book_id": 77, "title": "Unconverted",
-         "suggest_conversion": {"convert_command": ["x"], "ingest_command": ["y"]}},
+        {"kind": "candidate", "cost": "expensive", "book_id": 77, "title": "Unconverted",
+         "convert_command": ["x"], "ingest_command": ["y"]},
     ]
     proposal = dp.propose(
         "test query",
         campaign_dir=tmp_path,
         palace="/fake/palace",
-        rpglib_db="/fake/rpglib.db",
         retriever=_stub_retriever(hits),
     )
     assert proposal.query == "test query"
     assert proposal.raw_hit_count == 3
     assert len(proposal.slots["statblock"]) == 1
     assert len(proposal.slots["location"]) == 1
-    assert len(proposal.slots["conversion"]) == 1
+    assert len(proposal.slots["ingest_expensive"]) == 1
 
 
 def test_propose_handles_empty_retriever(tmp_path):

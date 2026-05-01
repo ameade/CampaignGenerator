@@ -228,20 +228,26 @@ def classify(hit: dict) -> str:
     """Return the slot name for one hit. Deterministic keyword match.
 
     Classifier order (strongest signal wins):
-      1. kind=="pointer"   → conversion
-      2. kind=="statblock" → statblock
-      3. encounter verbs   → encounter  (action beats)
-      4. NPC hint / named  → npc        (people)
-      5. location keywords → location   (geography)
-      6. otherwise         → lore       (background)
+      1. kind=="candidate" + cost=="cheap"      → ingest_cheap
+      2. kind=="candidate" + cost=="expensive"  → ingest_expensive
+      3. kind=="statblock"                      → statblock
+      4. encounter verbs                        → encounter
+      5. NPC hint / named                       → npc
+      6. location keywords                      → location
+      7. otherwise                              → lore
 
     Encounters and NPCs are pulled up above locations so a drawer like
     "bandits ambush the party at the narrow pass" doesn't get misfiled
     as a location just because the word "pass" appears.
     """
     kind = hit.get("kind")
-    if kind == "pointer":
-        return "conversion"
+    if kind == "candidate":
+        cost = hit.get("cost")
+        if cost == "cheap":
+            return "ingest_cheap"
+        if cost == "expensive":
+            return "ingest_expensive"
+        return "ingest_expensive"  # legacy fall-through
     if kind == "statblock":
         return "statblock"
     if _looks_like_encounter(hit):
@@ -273,16 +279,35 @@ def build_candidate(hit: dict) -> Candidate:
     entities = _extract_named_entities(hit.get("drawer_text"))
 
     conversion_hint = None
-    if hit.get("kind") == "pointer":
-        payload = hit.get("suggest_conversion") or {}
-        conversion_hint = {
-            "convert_command": payload.get("convert_command", []),
-            "ingest_command": payload.get("ingest_command", []),
-            "estimated_cost_tokens": payload.get("estimated_cost_tokens"),
-            "estimated_cost_usd_min": payload.get("estimated_cost_usd_min"),
-            "estimated_cost_usd_max": payload.get("estimated_cost_usd_max"),
-            "notes": payload.get("notes", []),
-        }
+    if hit.get("kind") == "candidate":
+        cost = hit.get("cost", "expensive")
+        if cost == "cheap":
+            conversion_hint = {
+                "cost": "cheap",
+                "ingest_command": hit.get("ingest_command", []),
+                "command": hit.get("command"),
+                "file_path": hit.get("file_path"),
+                "entity_type": hit.get("entity_type"),
+                "name": hit.get("name"),
+                "source": hit.get("source"),
+                "chapter_ordinal": hit.get("chapter_ordinal"),
+                "page": hit.get("page"),
+                "notes": [],
+            }
+        else:
+            conversion_hint = {
+                "cost": "expensive",
+                "convert_command": hit.get("convert_command", []),
+                "ingest_command": hit.get("ingest_command", []),
+                "command": hit.get("command"),
+                "filepath": hit.get("filepath"),
+                "relative_path": hit.get("relative_path"),
+                "product_id": hit.get("product_id"),
+                "estimated_cost_tokens": hit.get("estimated_cost_tokens"),
+                "estimated_cost_usd_min": hit.get("estimated_cost_usd_min"),
+                "estimated_cost_usd_max": hit.get("estimated_cost_usd_max"),
+                "notes": hit.get("notes", []),
+            }
 
     return Candidate(
         slot=slot,
@@ -309,7 +334,8 @@ def group_candidates(hits: list[dict]) -> dict[str, list[Candidate]]:
         "encounter": [],
         "statblock": [],
         "lore": [],
-        "conversion": [],
+        "ingest_cheap": [],
+        "ingest_expensive": [],
     }
     for hit in hits:
         cand = build_candidate(hit)
@@ -326,7 +352,8 @@ _SLOT_HEADERS = [
     ("encounter", "Encounters"),
     ("statblock", "Stat Blocks"),
     ("lore", "Lore & Background"),
-    ("conversion", "Conversion Suggestions (unconverted rpglib books)"),
+    ("ingest_cheap", "Cheap Ingest Candidates (5etools-canonical JSON on disk)"),
+    ("ingest_expensive", "Expensive Ingest Candidates (rpg-library PDFs needing conversion)"),
 ]
 
 
@@ -354,22 +381,32 @@ def _render_candidate(c: Candidate, index: int) -> str:
         lines.append("> " + c.excerpt)
     if c.conversion_hint:
         hint = c.conversion_hint
+        cost = hint.get("cost", "expensive")
         cmd_convert = " ".join(hint.get("convert_command") or [])
         cmd_ingest = " ".join(hint.get("ingest_command") or [])
-        tokens = hint.get("estimated_cost_tokens")
-        cost_lo = hint.get("estimated_cost_usd_min")
-        cost_hi = hint.get("estimated_cost_usd_max")
         lines.append("")
-        lines.append("**to convert:**")
-        if cmd_convert:
-            lines.append(f"```\n{cmd_convert}\n```")
-        if cmd_ingest:
-            lines.append("**then ingest:**")
-            lines.append(f"```\n{cmd_ingest}\n```")
-        if tokens:
+        if cost == "cheap":
             lines.append(
-                f"estimated: ~{tokens:,} tokens  (~${cost_lo:.2f}–${cost_hi:.2f})"
+                "**cheap ingest** "
+                f"(5etools JSON on disk: `{hint.get('file_path', '?')}`)"
             )
+            if cmd_ingest:
+                lines.append(f"```\n{cmd_ingest}\n```")
+        else:
+            lines.append("**expensive ingest** (PDF → JSON via pdf-translators v2)")
+            if cmd_convert:
+                lines.append("**convert:**")
+                lines.append(f"```\n{cmd_convert}\n```")
+            if cmd_ingest:
+                lines.append("**then ingest:**")
+                lines.append(f"```\n{cmd_ingest}\n```")
+            tokens = hint.get("estimated_cost_tokens")
+            cost_lo = hint.get("estimated_cost_usd_min")
+            cost_hi = hint.get("estimated_cost_usd_max")
+            if tokens:
+                lines.append(
+                    f"estimated: ~{tokens:,} tokens  (~${cost_lo:.2f}–${cost_hi:.2f})"
+                )
         for note in hint.get("notes") or []:
             lines.append(f"- note: {note}")
     return "\n".join(lines)
@@ -460,10 +497,13 @@ def propose(
     *,
     campaign_dir: str | os.PathLike | None = None,
     palace: str | None = None,
-    rpglib_db: str | os.PathLike | None = None,
+    rpg_library_url: str | None = None,
+    fivetools_data_root: str | os.PathLike | None = None,
     limit: int = 20,
-    max_pointers: int = 5,
-    include_unconverted_pointers: bool = True,
+    k_cheap: int = 10,
+    k_expensive: int = 5,
+    include_cheap: bool = True,
+    include_expensive: bool = True,
     retriever=retrieve,
     **retriever_kwargs: Any,
 ) -> Proposal:
@@ -471,13 +511,20 @@ def propose(
     campaign_dir_str = str(Path(campaign_dir).expanduser().resolve()) if campaign_dir else str(
         Path.cwd().resolve()
     )
+    retriever_kwargs.setdefault("limit", limit)
+    if rpg_library_url:
+        retriever_kwargs["rpg_library_url"] = rpg_library_url
+    if fivetools_data_root:
+        retriever_kwargs["fivetools_data_root"] = (
+            Path(fivetools_data_root).expanduser()
+        )
     retriever_result = retriever(
         query,
         palace=palace,
-        rpglib_db=Path(rpglib_db) if rpglib_db is not None else None,
-        limit=limit,
-        max_pointers=max_pointers,
-        include_unconverted_pointers=include_unconverted_pointers,
+        k_cheap=k_cheap,
+        k_expensive=k_expensive,
+        include_cheap=include_cheap,
+        include_expensive=include_expensive,
         **retriever_kwargs,
     )
     hits = retriever_result.get("hits", [])
@@ -487,7 +534,7 @@ def propose(
         query=query,
         campaign_dir=campaign_dir_str,
         palace=palace,
-        rpglib_db=str(rpglib_db) if rpglib_db is not None else None,
+        rpglib_db=rpg_library_url,
         generated_at=time.strftime("%Y-%m-%dT%H:%M:%S"),
         slots=slots,
         raw_hit_count=len(hits),
@@ -530,14 +577,16 @@ def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         help=f"Output path (default <campaign-dir>/{_DEFAULT_OUTPUT}).",
     )
     parser.add_argument("--palace", default=None)
-    parser.add_argument("--rpglib-db", type=Path, default=None)
+    parser.add_argument("--rpg-library-url", default=None)
+    parser.add_argument("--fivetools-data-root", type=Path, default=None)
     parser.add_argument("--limit", type=int, default=20)
-    parser.add_argument("--max-pointers", type=int, default=5)
+    parser.add_argument("--k-cheap", type=int, default=10)
+    parser.add_argument("--k-expensive", type=int, default=5)
     parser.add_argument(
-        "--no-pointers",
-        dest="include_unconverted_pointers",
-        action="store_false",
-        default=True,
+        "--no-cheap", dest="include_cheap", action="store_false", default=True,
+    )
+    parser.add_argument(
+        "--no-expensive", dest="include_expensive", action="store_false", default=True,
     )
     parser.add_argument("--force", action="store_true")
     parser.add_argument(
@@ -569,10 +618,13 @@ def main(argv: list[str] | None = None) -> int:
         args.query,
         campaign_dir=campaign_dir,
         palace=args.palace,
-        rpglib_db=args.rpglib_db,
+        rpg_library_url=args.rpg_library_url,
+        fivetools_data_root=args.fivetools_data_root,
         limit=args.limit,
-        max_pointers=args.max_pointers,
-        include_unconverted_pointers=args.include_unconverted_pointers,
+        k_cheap=args.k_cheap,
+        k_expensive=args.k_expensive,
+        include_cheap=args.include_cheap,
+        include_expensive=args.include_expensive,
     )
     markdown = render(proposal)
     if args.print:

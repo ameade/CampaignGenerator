@@ -465,6 +465,92 @@ class TestMatchesFilter:
         assert not fti.matches_filter({"name": "X", "source": "MM"}, {"name": "X", "source": "PHB"})
 
 
+class TestAdventureChapterFilter:
+    """`--filter chapter=N` selects one top-level adventure chapter."""
+
+    def _adventure_doc(self) -> dict:
+        return {
+            "_meta": {"sources": [{"json": "TST", "abbreviation": "TST"}]},
+            "data": [
+                {"type": "section", "name": "Chapter Zero",
+                 "entries": [{"type": "p", "entry": "Prose 0"}]},
+                {"type": "section", "name": "Chapter One",
+                 "entries": [{"type": "p", "entry": "Prose 1"}]},
+                {"type": "section", "name": "Chapter Two",
+                 "entries": [{"type": "p", "entry": "Prose 2"}]},
+            ],
+        }
+
+    def _chapter_names_in(self, drawers: list[dict]) -> set[str]:
+        """Pull section-path top-level names out of the drawers' metadata."""
+        names: set[str] = set()
+        for d in drawers:
+            sp = (d.get("metadata") or {}).get("section_path") or ""
+            if sp:
+                names.add(sp.split(" / ")[0])
+        return names
+
+    def test_no_filter_walks_all_chapters(self):
+        drawers = fti.build_drawers_from_json(
+            self._adventure_doc(),
+            book=None, book_room_slug="r", source_filepath="/x.json",
+        )
+        # Each chapter contributes a "section" drawer + a "p" prose drawer.
+        types = sorted(d.get("metadata", {}).get("entry_type")
+                       for d in drawers
+                       if d.get("metadata", {}).get("entry_type") in {"section", "p"})
+        assert types.count("section") == 3
+        assert types.count("p") == 3
+        # Three different chapters represented in section paths.
+        assert self._chapter_names_in(drawers) == {
+            "Chapter Zero", "Chapter One", "Chapter Two",
+        }
+
+    def test_chapter_zero_filter_keeps_only_chapter_zero(self):
+        drawers = fti.build_drawers_from_json(
+            self._adventure_doc(),
+            book=None, book_room_slug="r", source_filepath="/x.json",
+            filters={"chapter": "0"},
+        )
+        # Only Chapter Zero's section + its child prose should remain.
+        types = sorted(d.get("metadata", {}).get("entry_type")
+                       for d in drawers
+                       if d.get("metadata", {}).get("entry_type") in {"section", "p"})
+        assert types == ["p", "section"]
+        assert self._chapter_names_in(drawers) == {"Chapter Zero"}
+
+    def test_chapter_one_filter_keeps_only_chapter_one(self):
+        drawers = fti.build_drawers_from_json(
+            self._adventure_doc(),
+            book=None, book_room_slug="r", source_filepath="/x.json",
+            filters={"chapter": "1"},
+        )
+        assert self._chapter_names_in(drawers) == {"Chapter One"}
+
+    def test_non_integer_chapter_raises(self):
+        with pytest.raises(ValueError):
+            fti.build_drawers_from_json(
+                self._adventure_doc(),
+                book=None, book_room_slug="r", source_filepath="/x.json",
+                filters={"chapter": "first"},
+            )
+
+    def test_unsupported_filter_key_warns_but_proceeds(self, caplog):
+        caplog.set_level("WARNING")
+        drawers = fti.build_drawers_from_json(
+            self._adventure_doc(),
+            book=None, book_room_slug="r", source_filepath="/x.json",
+            filters={"name": "Velkynvelve"},
+        )
+        # All chapters still walked (unknown key ignored).
+        assert self._chapter_names_in(drawers) == {
+            "Chapter Zero", "Chapter One", "Chapter Two",
+        }
+        # Warning logged.
+        assert any("ignored for adventure-shape" in r.getMessage()
+                   for r in caplog.records)
+
+
 @pytest.fixture
 def catalog_doc(tmp_path: Path) -> Path:
     """A minimal catalog-shaped JSON: 2 monsters + 1 spell."""

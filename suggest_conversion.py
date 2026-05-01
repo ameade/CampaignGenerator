@@ -42,8 +42,23 @@ logger = logging.getLogger(__name__)
 
 
 _DEFAULT_RPGLIB_DB = Path.home() / "src" / "mytools" / "rpg-lib" / "rpg_library.db"
-_DEFAULT_CONVERT_SCRIPT = "convert_book.py"
+_DEFAULT_PDF_TRANSLATORS = Path.home() / "src" / "mytools" / "pdf-translators"
+_DEFAULT_CONVERT_SCRIPT_NAME = "pdf_to_5etools_v2.py"
 _DEFAULT_INGEST_SCRIPT = "fivetools_ingest.py"
+
+# product_type values that map to v2 --type book (vs the default --type adventure).
+_BOOK_PRODUCT_TYPES = frozenset(
+    {
+        "sourcebook",
+        "setting",
+        "gm_aid",
+        "anthology",
+        "character_options",
+        "magic_items",
+        "map_pack",
+        "non_rpg",
+    }
+)
 
 # Average tokens per PDF page once pdf-translators renders prose through
 # Claude. Measured empirically at ~500 tokens/page for adventure prose;
@@ -68,31 +83,58 @@ class ConversionSuggestion:
     estimated_cost_usd_min: float  # at $0.80 / 1M input (Haiku) rough
     estimated_cost_usd_max: float  # at $3.00 / 1M input (Sonnet)
     notes: list[str]
+    relative_path: str | None = None
+    product_id: str | None = None
+    palace: str | None = None
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)
 
 
+def _map_product_type_to_v2_flags(product_type: str | None) -> list[str]:
+    """Translate rpg-library product_type → v2 CLI flags."""
+    pt = (product_type or "").strip().lower()
+    if pt == "adventure":
+        return []  # default
+    if pt == "bestiary":
+        return ["--type", "book", "--monsters-only"]
+    if pt in _BOOK_PRODUCT_TYPES:
+        return ["--type", "book"]
+    if not pt:
+        return []
+    return ["--type", "book"]
+
+
 def _lookup_book(
     db_path: Path, *, book_id: int | None = None, filepath: str | None = None
 ) -> dict | None:
+    """Direct-SQLite ad-hoc lookup. CLI helper only — runtime retrieval
+    goes via rpg-library HTTP per Step 3 design D6.
+    """
     if not db_path.is_file():
         return None
     conn = sqlite3.connect(f"file:{db_path}?mode=ro", uri=True)
     try:
         conn.row_factory = sqlite3.Row
+        # Probe schema so we tolerate older rpg-library deployments that
+        # don't yet expose relative_path / product_id columns.
+        cols = {r[1] for r in conn.execute("PRAGMA table_info(books)")}
+        select_cols = ["id", "filename", "filepath",
+                       "publisher", "game_system", "product_type",
+                       "series", "tags", "page_count", "pdf_title"]
+        if "relative_path" in cols:
+            select_cols.append("relative_path")
+        if "product_id" in cols:
+            select_cols.append("product_id")
+        sql_cols = ", ".join(select_cols)
         if book_id is not None:
             row = conn.execute(
-                "SELECT id, filename, filepath, publisher, game_system, "
-                "product_type, series, tags, page_count, pdf_title "
-                "FROM books WHERE id = ?",
+                f"SELECT {sql_cols} FROM books WHERE id = ?",
                 (book_id,),
             ).fetchone()
         elif filepath is not None:
             row = conn.execute(
-                "SELECT id, filename, filepath, publisher, game_system, "
-                "product_type, series, tags, page_count, pdf_title "
-                "FROM books WHERE filepath = ?",
+                f"SELECT {sql_cols} FROM books WHERE filepath = ?",
                 (filepath,),
             ).fetchone()
         else:
@@ -134,14 +176,26 @@ def _cost_bounds(tokens: int) -> tuple[float, float]:
 def build_suggestion(
     book: dict,
     *,
-    convert_script: str = _DEFAULT_CONVERT_SCRIPT,
+    convert_script: str | None = None,
+    convert_script_dir: Path | str | None = None,
     ingest_script: str = _DEFAULT_INGEST_SCRIPT,
     python: str = sys.executable,
+    palace: str | None = None,
 ) -> ConversionSuggestion:
     """Assemble the suggestion payload from an rpglib book row.
 
-    ``book`` is the dict returned by :func:`_lookup_book` or
-    :func:`fivetools_ingest.lookup_book` — the shared rpglib schema.
+    ``book`` is a dict matching the rpg-library `BookSummary` / `BookDetail`
+    shape — typically delivered by the HTTP retriever or, for ad-hoc CLI
+    use, :func:`_lookup_book`.
+
+    By default the convert command targets pdf-translators v2
+    (`pdf_to_5etools_v2.py`). The `--type` flag is derived from
+    `product_type` (adventure → default, bestiary → `--type book
+    --monsters-only`, other → `--type book`).
+
+    ``palace`` is plumbed into the ingest command as `--palace <palace>`
+    when provided. The retriever passes the active campaign palace; the
+    CLI helper leaves it None.
     """
     filepath = str(book.get("filepath") or "")
     if not filepath:
@@ -157,18 +211,39 @@ def build_suggestion(
     page_count = int(book.get("page_count") or 0)
     tokens = estimate_tokens(page_count)
     cost_low, cost_high = _cost_bounds(tokens)
+    product_type = str(book.get("product_type") or "")
 
     notes: list[str] = []
     if page_count <= 0:
         notes.append("page count missing from rpglib row — cost estimate not reliable")
-    if book.get("product_type") and "bestiary" in str(book["product_type"]).lower():
+    if "bestiary" in product_type.lower():
         notes.append(
             "product_type suggests a bestiary — statblocks will route to "
             "wing_bestiary/ at ingest time"
         )
+    if page_count >= 100:
+        notes.append(
+            "page_count >= 100 — append `--batch` to the convert command "
+            "for ~50% cost reduction at the price of async (minutes) "
+            "completion"
+        )
 
-    convert_command = [python, convert_script, filepath]
+    # Resolve absolute path to the v2 converter so the GM can paste-and-run
+    # from any working directory. If `convert_script` is an absolute path,
+    # respect it as-is; otherwise join against `convert_script_dir`
+    # (defaults to ~/src/mytools/pdf-translators).
+    if convert_script is None:
+        convert_script = _DEFAULT_CONVERT_SCRIPT_NAME
+    script_path = Path(convert_script)
+    if not script_path.is_absolute():
+        base_dir = Path(convert_script_dir or _DEFAULT_PDF_TRANSLATORS).expanduser()
+        script_path = base_dir / script_path
+    convert_command = [python, str(script_path), filepath]
+    convert_command.extend(_map_product_type_to_v2_flags(product_type))
+
     ingest_command = [python, ingest_script, output_json]
+    if palace:
+        ingest_command += ["--palace", palace]
     if book.get("id") is not None:
         ingest_command += ["--book-id", str(book["id"])]
 
@@ -178,7 +253,7 @@ def build_suggestion(
         filepath=filepath,
         publisher=str(book.get("publisher") or ""),
         game_system=str(book.get("game_system") or ""),
-        product_type=str(book.get("product_type") or ""),
+        product_type=product_type,
         page_count=page_count,
         tags=list(book.get("tags") or []),
         output_json_path=output_json,
@@ -188,6 +263,11 @@ def build_suggestion(
         estimated_cost_usd_min=cost_low,
         estimated_cost_usd_max=cost_high,
         notes=notes,
+        relative_path=(str(book["relative_path"])
+                       if book.get("relative_path") else None),
+        product_id=(str(book["product_id"])
+                    if book.get("product_id") else None),
+        palace=palace,
     )
 
 
