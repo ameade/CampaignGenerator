@@ -5,6 +5,12 @@ system_prompt: config/system_prompt.md
 
 log_dir: logs/
 
+# Path to the canonical 5etools data tree. Used by fivetools_catalog.py
+# (cheap-candidate awareness) and as the default for fivetools_ingest.py
+# --fivetools-data-root. Override per-campaign by setting this in the
+# campaign workspace's config.yaml.
+fivetools_data_root: ~/src/5etools-kostadis/data
+
 # Agent prompts for --mode pipeline
 agents:
   lore_oracle: config/agents/lore_oracle.md
