@@ -8,15 +8,18 @@ CampaignGenerator integrates with three external tools to give the AI and the GM
 | **pdf-translators** (`~/src/5etools-kostadis/pdf-translators/`) | Converts a PDF into structured 5etools JSON. Human review in `adventure_editor` / `toc_editor` / `monster_editor`. |
 | **MemPalace** (`~/src/mempalace/` or a sibling worktree) | Verbatim-memory palace with hierarchical retrieval (`mempalace_search_hierarchical`). Source of prose hits + bestiary stat blocks. |
 
-## Three-state retrieval
+## Tiered retrieval
 
-`python rpg_retriever.py "fey forest encounter mid-level 5e"` returns:
+`python rpg_retriever.py "fey forest encounter mid-level 5e"` returns a single ranked list using a `kind` discriminator, with a `cost` discriminator on candidates:
 
 - `kind: "drawer"` — MemPalace hit (verbatim prose / table) joined with rpglib metadata.
 - `kind: "statblock"` — MemPalace hit in `wing_bestiary`. Compact creature reference.
-- `kind: "pointer"` — rpglib candidate that hasn't been ingested into MemPalace yet; includes a `suggest_conversion` payload with the exact `convert_book.py` + `fivetools_ingest.py` commands the user would run to make it searchable.
+- `kind: "candidate"`, `cost: "cheap"` — entity in the canonical 5etools tree (`fivetools_catalog`) that's not yet in the palace. Carries a `fivetools_ingest.py --filter` one-liner.
+- `kind: "candidate"`, `cost: "expensive"` — PDF in rpg-library with no canonical-JSON equivalent. Carries a `pdf_to_5etools_v2.py convert` + `fivetools_ingest.py` command pair plus the `(book_id, relative_path, product_id)` identifier triple.
 
-Writes go through **MemPalace's MCP server** (`mempalace_client.py`); reads from rpglib go through direct read-only SQLite. No CG module opens MemPalace's ChromaDB directly.
+Hard tier order: drawer/statblock > cheap > expensive. No score normalization across sources. See `docs/rlm_architecture.md` §9 for the canonical contract.
+
+Writes go through **MemPalace's MCP server** (`mempalace_client.py`); reads from rpg-library go through its HTTP API (stdlib `urllib`); reads from the canonical 5etools tree go through `fivetools_catalog` in-process. No CG module opens MemPalace's ChromaDB directly.
 
 ## Ingest flow (explicit user step, never automatic)
 
@@ -62,9 +65,9 @@ Without `--require-proposal`, the scripts still auto-attach an approved proposal
 
 | Tool | Purpose |
 |---|---|
-| `rpg_search` | Run `rpg_retriever.retrieve`; returns the three-state JSON. No side effects. |
-| `propose_dossier` | Run `rpg_search` and write `docs/dossier_proposal.md`. Returns a status string. |
-| `suggest_conversion` | Build the `convert_book.py` + `fivetools_ingest.py` command payload for a specific unconverted book (by id or filepath). |
+| `rpg_search` | Run `rpg_retriever.retrieve`; returns tiered JSON (drawer / statblock / cost-tagged candidate). Args: `query`, `k_cheap`, `k_expensive`, `include_cheap`, `include_expensive`, `source`, `book_id`, `file_path`, `filter`, `palace`. Three modes through one tool: search (with `query`), scoped search (`query` + `source` or `book_id`), pin (`file_path`+`filter` or `book_id`). No side effects. |
+| `propose_dossier` | Run `rpg_search` and write `docs/dossier_proposal.md`. Cheap and expensive ingest blocks are formatted differently so cost is legible at GM-review time. Returns a status string. |
+| `suggest_conversion` | Build the `pdf_to_5etools_v2.py convert` + `fivetools_ingest.py` command pair for a specific unconverted book (by id or filepath). `product_type` maps to v2's `--type` / `--monsters-only`. |
 
 None of these tools calls Claude. They are retrieval / slotting / command-building only.
 

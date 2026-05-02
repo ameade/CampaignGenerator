@@ -43,11 +43,13 @@ Before step 1, the campaign workspace looks like:
 
 Assumptions:
 
-* The MemPalace palace (`/mnt/data/mempalace/palaces/chat` or wherever
-  `MEMPALACE_PALACE_PATH` points) already has drawers from the books
-  you care about — the ingest workflow (`convert_book.py` →
-  `fivetools_ingest.py`) ran earlier. If not, retrieval will surface
-  pointer suggestions for unconverted books but nothing else.
+* The MemPalace palace (`/mnt/data/mempalace/palaces/<campaign>` or
+  wherever `MEMPALACE_PALACE_PATH` points) already has drawers from the
+  books you care about — the ingest workflow (`fivetools_ingest.py`,
+  optionally preceded by `pdf_to_5etools_v2.py convert`) ran earlier.
+  If not, retrieval will surface cost-tagged candidate suggestions
+  (cheap = canonical 5etools JSON ready for one-shot ingest; expensive
+  = unconverted PDF that needs pdf-translators first) but nothing else.
 * `rpg_library.db` exists and is enriched. Default path
   `~/src/mytools/rpg-lib/rpg_library.db`; override with
   `$RPGLIB_DB` or the `rpglib_db` key in `config.yaml`.
@@ -71,15 +73,23 @@ python ~/src/CampaignGenerator/dossier_proposer.py \
 What happens internally (no Claude call — this is the point):
 
 1. Resolve `campaign_dir` → `~/campaigns/icespire`.
-2. Call `rpg_retriever.retrieve(query, palace=..., rpglib_db=...)`:
-   * Open `rpg_library.db` read-only; tokenized SQL search surfaces
-     candidate book rows (Dragon of Icespire Peak, Monster Manual, …).
+2. Call `rpg_retriever.retrieve(query, palace=..., rpg_library_url=...)`:
+   * Query rpg-library over HTTP (`/api/library/nlq` for free-text;
+     `/api/library/search` for structured filters). Surfaces candidate
+     book rows (Dragon of Icespire Peak, Monster Manual, …) carrying
+     `(book_id, filepath, relative_path, product_id)`.
+   * Query the canonical 5etools tree via `fivetools_catalog.search()`
+     (mtime-cached pickle index). Surfaces named entities and chapter
+     records.
    * Spawn `mempalace-mcp` as a subprocess; send
      `mempalace_search_hierarchical(query)`; get drawer hits with
      wing/room/book_id metadata.
-   * Reconcile: drawers tagged `kind="drawer"`; bestiary hits tagged
-     `kind="statblock"`; rpglib books with no drawers tagged
-     `kind="pointer"` with their convert + ingest commands attached.
+   * Merge into a single tiered list: drawers tagged `kind="drawer"`;
+     bestiary hits tagged `kind="statblock"`; canonical-5etools hits
+     tagged `kind="candidate"` with `cost="cheap"`; rpg-library books
+     with no drawers tagged `kind="candidate"` with `cost="expensive"`.
+     Each candidate carries `command_argv` + `command` (the ingest
+     one-liner). Hard tier order: drawer/statblock > cheap > expensive.
 3. `classify()` buckets every hit into one of six slots:
    * **npc** — NPC hint words (townmaster, priestess, captain, …) or a
      multi-token proper noun cluster (e.g. "Grundar Quartzvein").
@@ -89,10 +99,12 @@ What happens internally (no Claude call — this is the point):
    * **encounter** — combat verbs (ambush, fight, assault, strike, …).
    * **statblock** — `kind == "statblock"` (routed at ingest to
      `wing_bestiary`).
-   * **conversion** — `kind == "pointer"` (rpglib knows the book,
-     MemPalace hasn't seen drawers from it).
+   * **conversion** — `kind == "candidate"` (the awareness layer knows
+     the source, MemPalace hasn't seen drawers from it). Cheap and
+     expensive candidates render as separate ingest blocks in the
+     proposal so cost is legible at GM-review time.
    * **lore** — anything else that didn't match a stronger signal.
-   * Classifier order: pointer → statblock → encounter → npc →
+   * Classifier order: candidate → statblock → encounter → npc →
      location → lore. Encounters and NPCs outrank locations so
      "bandits ambush the party at the narrow pass" doesn't get misfiled
      as a location just because the word "pass" appears.

@@ -33,7 +33,8 @@ new_workspace.py            # CLI: create a new campaign workspace
 transform.py                # CLI: NotebookLLM dossiers → prep.py input
 
 # ── RLM tools ──
-rpg_retriever.py            # Three-state retrieval (drawer / statblock / pointer)
+rpg_retriever.py            # Tiered retrieval (drawer / statblock / cost-tagged candidate)
+fivetools_catalog.py        # Mtime-cached name index over canonical 5etools data
 dossier_proposer.py         # Run retrieval → write docs/dossier_proposal.md
 proposal_loader.py          # Render pipelines consume approved proposals
 mempalace_client.py         # Writes via MemPalace MCP
