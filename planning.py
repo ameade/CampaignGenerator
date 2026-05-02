@@ -530,7 +530,35 @@ def main() -> None:
                              "historical chunks already rolled into dossiers.")
     parser.add_argument("--model", default="claude-sonnet-4-20250514",
                         help="Claude model to use")
+    parser.add_argument("--campaign-dir", default=None,
+                        help="Campaign workspace root (default: $CAMPAIGN_DIR "
+                             "or the output file's parent, or CWD). Used to "
+                             "locate docs/dossier_proposal.md.")
+    parser.add_argument("--require-proposal", action="store_true",
+                        help="Refuse to run the synthesize pass unless "
+                             "<campaign-dir>/docs/dossier_proposal.md exists "
+                             "and has been approved.")
     args = parser.parse_args()
+
+    # Resolve the proposal check BEFORE the synthesize render call.
+    if args.require_proposal:
+        import os as _os
+
+        from proposal_loader import (
+            ProposalNotApproved,
+            ProposalRequired,
+            require_approved_proposal,
+        )
+        _planning_campaign_dir = (
+            args.campaign_dir
+            or _os.environ.get("CAMPAIGN_DIR")
+            or (str(Path(args.output).expanduser().resolve().parent.parent)
+                if args.output else str(Path.cwd().resolve()))
+        )
+        try:
+            require_approved_proposal(_planning_campaign_dir)
+        except (ProposalRequired, ProposalNotApproved) as exc:
+            parser.error(str(exc))
 
     if args.synthesize_only and args.extract_only:
         print("Error: --synthesize-only and --extract-only are mutually exclusive",

@@ -1113,6 +1113,15 @@ def main() -> None:
                              "Pass 5 with a narrator-POV directive. Pass 3 reads the "
                              "scene checklist from this directory's filenames/frontmatter "
                              "instead of the recap. Forces --by-scene.")
+    parser.add_argument("--campaign-dir", default=None,
+                        help="Campaign workspace root (default: $CAMPAIGN_DIR "
+                             "or the recap file's parent directory). Used to "
+                             "locate docs/dossier_proposal.md.")
+    parser.add_argument("--require-proposal", action="store_true",
+                        help="Refuse to run unless "
+                             "<campaign-dir>/docs/dossier_proposal.md exists "
+                             "and has been approved (status banner edited "
+                             "away from `candidates only`).")
     args = parser.parse_args()
     if args.output is None and args.per_scene_output is None and not args.plan_only and not args.extract_only:
         parser.error("either --output or --per-scene-output must be set "
@@ -1124,6 +1133,26 @@ def main() -> None:
     if args.per_scene_output:
         per_scene_output_dir = Path(args.per_scene_output).expanduser()
         per_scene_output_dir.mkdir(parents=True, exist_ok=True)
+
+    # Resolve the proposal check BEFORE any Claude calls. Everything
+    # below this point may hit stream_api — the refuse guard lives here.
+    import os as _os
+
+    from proposal_loader import (
+        ProposalNotApproved,
+        ProposalRequired,
+        require_approved_proposal,
+    )
+    _session_doc_campaign_dir = (
+        args.campaign_dir
+        or _os.environ.get("CAMPAIGN_DIR")
+        or str(Path(args.recap).expanduser().resolve().parent)
+    )
+    if args.require_proposal:
+        try:
+            require_approved_proposal(_session_doc_campaign_dir)
+        except (ProposalRequired, ProposalNotApproved) as exc:
+            parser.error(str(exc))
 
     # ── Load inputs ───────────────────────────────────────────────────────────
     recap_path = Path(args.recap).expanduser()

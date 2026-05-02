@@ -1,0 +1,127 @@
+"""Static assertion for the Phase 3 "retrieval ≠ render" invariant.
+
+The RLM integration plan requires that render pipelines consume a
+human-approved ``docs/dossier_proposal.md`` rather than raw
+``rpg_retriever`` / ``mempalace_search_hierarchical`` output. Enforced
+mechanically: no function body in the repository may contain BOTH a
+retrieval call and a render call.
+
+This test walks every top-level ``.py`` module in the CampaignGenerator
+worktree (ignoring the venv, third-party dirs, tests themselves) and
+fails loudly if any single function body calls both an ingredient from
+each list.
+
+Retrieval sentinels (any call within the body):
+  * rpg_retriever.retrieve / any attribute on the imported module
+  * mempalace_search_hierarchical (MCP tool name)
+  * MempalaceClient.search_hierarchical / .search
+
+Render sentinels (any call within the body):
+  * stream_api / call_api  (campaignlib.py)
+
+The check is lexical (name-based) — good enough in practice because
+CampaignGenerator scripts use the shared names verbatim.
+"""
+
+from __future__ import annotations
+
+import ast
+from pathlib import Path
+
+import pytest
+
+
+REPO_ROOT = Path(__file__).resolve().parent.parent
+SKIP_DIRS = {
+    "venv", ".venv", "__pycache__", "node_modules", "frontend",
+    ".git", "logs", "tests",
+}
+
+RETRIEVAL_NAMES = frozenset(
+    {
+        "retrieve",
+        "search_within",
+        "search_hierarchical",
+        "mempalace_search_hierarchical",
+        "rpg_search",
+    }
+)
+RENDER_NAMES = frozenset({"stream_api", "call_api"})
+
+# Modules that ARE allowed to mix — they implement the plumbing or
+# explicitly own the MCP surface. The rule applies to higher-level
+# orchestration and script-level code.
+ALLOWED_FILES = {
+    "mempalace_client.py",   # the client exposes both surfaces by design
+    "rpg_retriever.py",      # pure retrieval; we still want the test to run on it
+    "dossier_proposer.py",   # slotting only, never calls render
+    "campaignlib.py",        # defines stream_api / call_api themselves
+    "server/subprocess_runner.py",  # transport layer for CLIs
+}
+
+
+def _is_candidate_file(path: Path) -> bool:
+    if path.suffix != ".py":
+        return False
+    rel = path.relative_to(REPO_ROOT)
+    parts = rel.parts
+    if any(part in SKIP_DIRS for part in parts):
+        return False
+    if str(rel).replace("\\", "/") in ALLOWED_FILES:
+        return False
+    return True
+
+
+def _collect_call_names(node: ast.AST) -> set[str]:
+    """Return every attribute / free-name that appears in a Call's func."""
+    names: set[str] = set()
+    for child in ast.walk(node):
+        if isinstance(child, ast.Call):
+            func = child.func
+            if isinstance(func, ast.Name):
+                names.add(func.id)
+            elif isinstance(func, ast.Attribute):
+                names.add(func.attr)
+    return names
+
+
+def _function_bodies(module: ast.Module):
+    """Yield (qualname, node) for every def / async def in the module."""
+    for node in ast.walk(module):
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+            yield (node.name, node)
+
+
+def _iter_candidate_files():
+    for path in sorted(REPO_ROOT.rglob("*.py")):
+        if _is_candidate_file(path):
+            yield path
+
+
+@pytest.mark.parametrize("path", list(_iter_candidate_files()), ids=lambda p: str(p.relative_to(REPO_ROOT)))
+def test_no_retrieve_render_colocation(path: Path):
+    source = path.read_text(encoding="utf-8")
+    try:
+        tree = ast.parse(source, filename=str(path))
+    except SyntaxError as exc:
+        pytest.fail(f"{path}: could not parse: {exc}")
+
+    offenders: list[str] = []
+    for name, node in _function_bodies(tree):
+        calls = _collect_call_names(node)
+        has_retrieve = bool(calls & RETRIEVAL_NAMES)
+        has_render = bool(calls & RENDER_NAMES)
+        if has_retrieve and has_render:
+            offenders.append(
+                f"{path.relative_to(REPO_ROOT)}::{name} "
+                f"(retrieve+render in one body: {sorted(calls & (RETRIEVAL_NAMES | RENDER_NAMES))})"
+            )
+
+    if offenders:
+        joined = "\n  ".join(offenders)
+        pytest.fail(
+            "Phase 3 isolation violated — retrieval and render co-located:\n  "
+            + joined
+            + "\n\nSplit the function: retrieve in one, render in another, "
+            "with the human-reviewed dossier_proposal.md as the handoff."
+        )
