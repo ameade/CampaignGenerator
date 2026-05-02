@@ -473,13 +473,16 @@ def _load_catalog_silently(data_root: Path | None):
     """Best-effort load the 5etools catalog. Returns None on any failure
     so cheap-tier candidates degrade gracefully.
     """
+    if data_root is None:
+        logger.warning("no fivetools_data_root configured — cheap candidates disabled")
+        return None
     try:
         import fivetools_catalog as fc
     except ImportError:
         logger.warning("fivetools_catalog import failed — cheap candidates disabled")
         return None
     try:
-        return fc.load_or_build(data_root) if data_root else fc.load_or_build()
+        return fc.load_or_build(data_root)
     except Exception as exc:  # noqa: BLE001
         logger.warning("fivetools_catalog load failed: %s — cheap candidates disabled", exc)
         return None
@@ -680,12 +683,47 @@ def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     return parser.parse_args(argv)
 
 
+def _resolve_cli_defaults(args: argparse.Namespace) -> argparse.Namespace:
+    """Backfill CLI args from config.yaml + env vars where unset, mirroring
+    the MCP server's resolution. Lets ``python rpg_retriever.py "query"``
+    from a campaign workspace pick up the configured palace and 5etools
+    data root without forcing every flag on the command line.
+    """
+    import os
+    from campaignlib import find_default_config, load_config
+
+    try:
+        config_path = find_default_config(__file__)
+        config, _ = load_config(config_path)
+    except Exception:  # noqa: BLE001
+        config = {}
+
+    if args.fivetools_data_root is None:
+        env = os.environ.get("FIVETOOLS_DATA_ROOT")
+        cfg = config.get("fivetools_data_root")
+        if env:
+            args.fivetools_data_root = Path(env).expanduser()
+        elif isinstance(cfg, str) and cfg:
+            args.fivetools_data_root = Path(cfg).expanduser()
+
+    if args.rpg_library_url == _DEFAULT_RPGLIB_URL:
+        env = os.environ.get("RPG_LIBRARY_URL")
+        cfg = config.get("rpg_library_url")
+        if env:
+            args.rpg_library_url = env
+        elif isinstance(cfg, str) and cfg:
+            args.rpg_library_url = cfg
+
+    return args
+
+
 def main(argv: list[str] | None = None) -> int:
     args = _parse_args(argv)
     logging.basicConfig(
         level=logging.DEBUG if args.verbose else logging.INFO,
         format="%(levelname)s %(name)s: %(message)s",
     )
+    args = _resolve_cli_defaults(args)
     out = retrieve(
         args.query,
         palace=args.palace,
