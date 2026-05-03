@@ -302,32 +302,6 @@ Pick one of the four candidate fixes documented in
 - `server/config.py:_SAVE_KEY_PREFIXES` — backend prefix filter that decides
   which keys land in `ui_config.yaml`
 
-### [ ] Scene Editor: diff-vs-previous-extraction view for re-runs
-
-**Context**
-With the dismissable banner and the per-scene reviewed marker in
-place, the remaining nice-to-have for the Stage 2 review checkpoint
-is a way to see *what changed* when the user re-runs Stage 2 against
-the same VTT (e.g. after the spell-check pass updates a glossary).
-Today the reviewer has to re-read the whole extraction to spot what
-moved.
-
-**What to do**
-Cache the prior extraction body (probably as `<extraction>.prev` or
-in a small sidecar dir) on each Stage-2 run, and surface a "Show
-diff vs. last run" toggle in `ExtractionEditor.vue` that renders the
-two against each other inline. Reset the reviewed marker when the
-diff is non-empty so the user can't accidentally keep an "approved"
-status across a re-run that changed content.
-
-**Where it lives**
-- `server/routers/scene_editor.py` — endpoint that returns the
-  cached previous extraction text alongside the current one
-- `frontend/src/components/scene-editor/ExtractionEditor.vue` — the
-  diff view itself (a small library or hand-rolled line-diff)
-- Stage-2 runner — write the previous extraction to its sidecar
-  before overwriting
-
 ### [ ] Generalize `--since` (per-chunk re-extract) to all extract→synthesize pipelines
 
 **Context**

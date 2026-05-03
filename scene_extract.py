@@ -122,7 +122,11 @@ def _sidecar_path(out_dir: Path) -> Path:
 
 
 def _submit_pending(args, *, scenes, vtt_text, out_dir, alias_map):
-    """Build per-scene Requests for not-yet-extracted scenes and submit one batch."""
+    """Build per-scene Requests for not-yet-extracted scenes and submit one batch.
+
+    With `args.force`, every scene is treated as pending (the on-disk file
+    is overwritten on collect, with the prior version snapshotted to .prev).
+    """
     normalize, _ = build_alias_normalizer(alias_map)
     system_suffix = format_npc_roster(alias_map)
     system_prompt = build_scene_extraction_system_prompt(
@@ -133,7 +137,7 @@ def _submit_pending(args, *, scenes, vtt_text, out_dir, alias_map):
     )
 
     plan = plan_scene_extraction(scenes=scenes, extract_dir=out_dir)
-    pending = [p for p in plan if not p["exists"]]
+    pending = plan if args.force else [p for p in plan if not p["exists"]]
     if not pending:
         print("\nAll scenes already extracted on disk — nothing to submit.")
         return None, plan, system_prompt
@@ -177,13 +181,18 @@ def _submit_pending(args, *, scenes, vtt_text, out_dir, alias_map):
 
 def _collect_and_write(client, *, batch_id: str, out_dir: Path,
                        plan_entries: list[dict],
-                       sidecar: Path | None = None) -> list[Path]:
+                       sidecar: Path | None = None,
+                       force: bool = False) -> list[Path]:
     """Retrieve batch results and write per-scene files using format_scene_output.
 
     `plan_entries` is the full plan list (from plan_scene_extraction or the
     sidecar) so we can map custom_id back to the on-disk path and the
-    verbatim scene body. Already-existing files are left alone.
+    verbatim scene body. Already-existing files are left alone unless
+    `force=True`, in which case prior content is snapshotted to .prev (only
+    when content differs) and any .reviewed sidecar is cleared.
     """
+    from campaignlib import snapshot_scene_for_rerun
+
     print(f"\n[Collecting batch {batch_id}...]")
     results = collect_batch(client, batch_id)
     saved: list[Path] = []
@@ -197,7 +206,7 @@ def _collect_and_write(client, *, batch_id: str, out_dir: Path,
                   file=sys.stderr)
             continue
         path = Path(entry["path"])
-        if path.exists():
+        if path.exists() and not force:
             print(f"  [{entry['i']}] {path.name}: already on disk — leaving untouched")
             saved.append(path)
             continue
@@ -208,12 +217,16 @@ def _collect_and_write(client, *, batch_id: str, out_dir: Path,
         text = record["text"] or ""
         body_text = format_scene_output(entry["name"], entry.get("body", ""), text)
         path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_text(body_text, encoding="utf-8")
-        saved.append(path)
-        usage = record.get("usage") or {}
-        cache_read = usage.get("cache_read_input_tokens")
-        suffix = f" | cache_read={cache_read}" if cache_read else ""
-        print(f"  [{entry['i']}] Saved: {path.name}{suffix}")
+        if snapshot_scene_for_rerun(path, body_text):
+            path.write_text(body_text, encoding="utf-8")
+            saved.append(path)
+            usage = record.get("usage") or {}
+            cache_read = usage.get("cache_read_input_tokens")
+            suffix = f" | cache_read={cache_read}" if cache_read else ""
+            print(f"  [{entry['i']}] Saved: {path.name}{suffix}")
+        else:
+            saved.append(path)
+            print(f"  [{entry['i']}] Unchanged (no overwrite): {path.name}")
 
     if errors:
         print("\nErrors:", file=sys.stderr)
@@ -265,6 +278,12 @@ def main() -> None:
                         help="Max output tokens per scene (default: 8192)")
     parser.add_argument("--no-cache", action="store_true",
                         help="Disable prompt caching of the VTT prefix")
+    parser.add_argument("--force", action="store_true",
+                        help="Re-extract even if per-scene files already exist. "
+                             "Prior content is snapshotted to <file>.prev "
+                             "(only when content differs) and any <file>.reviewed "
+                             "marker is cleared. Default behavior skips existing "
+                             "files so partial runs can be resumed.")
     parser.add_argument("--no-log", action="store_true")
     parser.add_argument("--batch", action="store_true",
                         help="Use Anthropic's Message Batches API (50%% off list price). "
@@ -319,7 +338,8 @@ def main() -> None:
         poll_batch(client, batch_id, interval=args.poll_interval,
                    on_tick=lambda b: print("  " + format_batch_progress(b), flush=True))
         saved = _collect_and_write(client, batch_id=batch_id, out_dir=out_dir,
-                                   plan_entries=plan_entries, sidecar=sidecar)
+                                   plan_entries=plan_entries, sidecar=sidecar,
+                                   force=args.force)
         print(f"\nWrote {len(saved)} scene file(s) to {out_dir}")
         return
 
@@ -413,6 +433,7 @@ def main() -> None:
             input_normalizer=normalize if alias_map else None,
             cache_vtt=not args.no_cache,
             max_tokens=args.max_tokens,
+            force=args.force,
         )
         print("=" * 60)
         print(f"\nWrote {len(saved)} scene file(s) to {out_dir}")
@@ -446,7 +467,8 @@ def main() -> None:
                on_tick=lambda b: print("  " + format_batch_progress(b), flush=True))
     sidecar = _sidecar_path(out_dir)
     saved = _collect_and_write(client, batch_id=batch_id, out_dir=out_dir,
-                               plan_entries=plan_entries, sidecar=sidecar)
+                               plan_entries=plan_entries, sidecar=sidecar,
+                               force=args.force)
     print(f"\nWrote {len(saved)} scene file(s) to {out_dir}")
 
     if not args.no_log:
