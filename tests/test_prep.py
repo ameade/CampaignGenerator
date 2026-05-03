@@ -273,6 +273,73 @@ def test_extract_scene_text_no_scenes_section():
     assert text == ""
 
 
+# ── session_doc --plan-only persists plan.md ─────────────────────────────────
+
+def test_plan_only_writes_plan_md_to_per_scene_output(tmp_path, monkeypatch):
+    """--plan-only must persist plan.md so per-scene Narrate can reuse it.
+
+    Regression: the save block sat after `if args.plan_only: return`, so
+    Plan & Check produced narrators+focus in memory but never wrote them
+    to disk — per-scene Narrate then re-ran Pass 3 from scratch.
+    """
+    summary = tmp_path / "session-summary.md"
+    summary.write_text("## Summary\n\nThe party climbed.\n", encoding="utf-8")
+
+    sx_dir = tmp_path / "scene_extractions"
+    sx_dir.mkdir()
+    (sx_dir / "01_stone_giants.md").write_text(
+        "---\nscene: The Stone Giants\n---\n\nVukradin stared down the giants.\n",
+        encoding="utf-8",
+    )
+    (sx_dir / "02_glacier.md").write_text(
+        "---\nscene: The Whispering Glacier\n---\n\nSoma scouted as an eagle.\n",
+        encoding="utf-8",
+    )
+
+    nd = tmp_path / "narration_dir"
+    nd.mkdir()
+
+    fake_plan = (
+        "## Section 1\n"
+        "narrator: Vukradin\n"
+        "chunks: 1-1\n"
+        "scene: The Stone Giants\n"
+        "focus: holding the line against the giants\n\n"
+        "## Section 2\n"
+        "narrator: Soma\n"
+        "chunks: 2-2\n"
+        "scene: The Whispering Glacier\n"
+        "focus: scouting the route ahead\n"
+    )
+
+    monkeypatch.setattr(session_doc, "make_client", lambda: object())
+    monkeypatch.setattr(
+        session_doc, "stream_api",
+        lambda *a, **kw: fake_plan,
+    )
+
+    monkeypatch.setattr(
+        sys, "argv",
+        [
+            "session_doc.py", str(summary),
+            "--scene-extractions", str(sx_dir),
+            "--per-scene-output", str(nd),
+            "--plan-only",
+            "--no-plan-review",
+        ],
+    )
+
+    session_doc.main()
+
+    plan_path = nd / "plan.md"
+    assert plan_path.exists(), "plan.md must be written under --plan-only"
+    plan_text = plan_path.read_text(encoding="utf-8")
+    assert "narrator: Vukradin" in plan_text
+    assert "narrator: Soma" in plan_text
+    assert "focus: holding the line against the giants" in plan_text
+    assert "focus: scouting the route ahead" in plan_text
+
+
 # ── session_doc.build_char_extract_prompt ────────────────────────────────────
 
 def _scene_section(scene_name, chunk_start=1, chunk_end=1):

@@ -1315,6 +1315,8 @@ def main() -> None:
         print("\n[Passes 1–4: Skipped — loading extractions from disk]")
     elif single_narrator:
         print(f"\n[Pass 1: Skipped — single-narrator mode ({single_narrator})]")
+    elif enhanced_sections:
+        print(f"\n[Pass 1: Skipped — pre-saved enhanced sections already include consistency review]")
     elif context_parts:
         print(f"\n[Pass 1: Consistency check | model: {args.model}]")
         print("=" * 60)
@@ -1375,10 +1377,11 @@ def main() -> None:
         print("=" * 60)
 
         # Save to disk so the user can review, edit, and reuse in narration
-        if extract_dir and enhanced_sections:
-            enhanced_out = extract_dir / "enhanced_sections.md"
+        cache_dir = extract_dir or per_scene_output_dir
+        if cache_dir and enhanced_sections:
+            enhanced_out = cache_dir / "enhanced_sections.md"
             enhanced_out.write_text(enhanced_sections, encoding="utf-8")
-            print(f"  Enhanced sections saved: {enhanced_out.name}")
+            print(f"  Enhanced sections saved: {enhanced_out}")
 
     # ── Pass 3: Narrative plan ─────────────────────────────────────────────────
     if args.plan_file:
@@ -1521,15 +1524,19 @@ def main() -> None:
     else:
         sections = list(enumerate(sections, 1))
 
-    if args.plan_only:
-        return
-
-    # Save the plan alongside extractions so --from-extractions can reload it
-    if extract_dir:
-        plan_save = extract_dir / "plan.md"
+    # Save the plan alongside extractions so --from-extractions can reload it.
+    # Must happen before the --plan-only return so Plan & Check actually
+    # writes plan.md (with narrators and per-scene focus) to disk.
+    plan_cache_dir = extract_dir or per_scene_output_dir
+    if plan_cache_dir:
+        plan_save = plan_cache_dir / "plan.md"
         plan_save.write_text(plan_text, encoding="utf-8")
         print(f"  Plan saved to: {plan_save}")
 
+    if args.plan_only:
+        return
+
+    if extract_dir:
         # Mandatory human checkpoint: stop here so the user can review plan.md
         # before Pass 4 commits tokens to per-scene extraction.
         # Does NOT fire when --plan-file was supplied (human already reviewed it),

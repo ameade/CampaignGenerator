@@ -418,6 +418,9 @@ def _build_narrate_cmd(scene_num: int) -> list[str] | tuple[None, str]:
         enhanced_path = nd / "enhanced_sections.md"
         if enhanced_path.exists():
             cmd += ["--enhanced-sections", str(enhanced_path)]
+    plan_path = nd / "plan.md"
+    if plan_path.exists():
+        cmd += ["--plan-file", str(plan_path)]
     return cmd
 
 
