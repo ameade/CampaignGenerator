@@ -36,7 +36,7 @@ const voiceDir = ref('')
 const examplesDir = ref('')
 const characters = ref('')
 const context = ref('')
-const narrateTokens = ref(4000)
+const narrateTokens = ref(16000)
 const proseMode = ref(false)
 const reflections = ref(false)
 const useEnhancedSections = ref(true)
@@ -61,7 +61,7 @@ function loadConfigFields() {
   examplesDir.value = v.sd_examples_dir || v.session_doc_examples_dir || ''
   characters.value = v.sd_characters || v.session_doc_characters || ''
   context.value = v.vtt_context || ''
-  narrateTokens.value = v.sd_narrate_tokens || v.session_doc_narrate_tokens || 4000
+  narrateTokens.value = v.sd_narrate_tokens || v.session_doc_narrate_tokens || 16000
   proseMode.value = v.sd_prose_mode || false
   reflections.value = v.sd_reflections || false
   useEnhancedSections.value = v.sd_use_enhanced_sections !== false
@@ -523,7 +523,7 @@ onMounted(async () => {
             <label class="field-label">Narration token limit</label>
             <input type="number" class="field-input" v-model.number="narrateTokens"
               min="1000" step="500" />
-            <div class="field-help">Per-scene output cap (default: 4000). Override per-scene with "tokens: N" in extraction file.</div>
+            <div class="field-help">Per-scene output cap (default: 16000). Override per-scene with "tokens: N" in extraction file.</div>
           </div>
           <div class="field">
             <label class="field-label checkbox-label">

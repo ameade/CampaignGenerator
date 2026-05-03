@@ -1566,7 +1566,7 @@ def main() -> None:
         # Extraction pulls verbatim dialogue — output scales with input size.
         # Estimate ~1 output token per 4 input chars, with a floor of 1500 and cap of 8192.
         extract_tokens = 4096  # updated after prompt is built (scene mode)
-        narrate_tokens = args.narrate_tokens or 12000
+        narrate_tokens = args.narrate_tokens or 16000
         file_token_override: int | None = None
 
         # Pass 4: character-specific extraction (silent)
