@@ -302,57 +302,44 @@ Pick one of the four candidate fixes documented in
 - `server/config.py:_SAVE_KEY_PREFIXES` — backend prefix filter that decides
   which keys land in `ui_config.yaml`
 
-### [ ] Scene Editor: signal that the review goal is "confirm order is right," not "re-order"
+### [ ] Scene Editor: persist a per-scene "[x] Reviewed — order looks right" flag
 
 **Context**
-The Stage 2 / scene-extraction checkpoint is easy to misread. New users
-(and even experienced ones returning after a break) assume the review
-step requires manually editing or resorting the `## Verbatim moments`
-list before narrating. That assumption inflates the perceived cost of
-the checkpoint and discourages running it.
-
-What's actually true (now documented at
+The dismissable banner now reminds users that the Stage 2 review is a
+**confirm-order** step, not a reorder step (see
 `docs/session_doc_pipeline.md` → "What 'review' means at the Stage 2 /
-scene-extraction checkpoint"):
-
-- VTT moments arrive roughly chronological from Zoom timestamps.
-- Pass 5's prompt explicitly forbids reordering — it's a renderer over
-  the order it's given.
-- A "no edits needed" review is a valid, intended outcome. The goal is
-  to **confirm order**, edit only when something is genuinely wrong
-  (interleaved exchanges, stray lines from another scene, hallucinated
-  quotes, missing GM-recap beats).
+scene-extraction checkpoint", and the peach banner at the top of
+`ExtractionEditor.vue`'s Extraction tab). The remaining piece is a
+durable per-scene approval marker so the user can see at a glance
+which scenes they have already validated.
 
 **What to do**
-Surface this guidance in the Session Doc Editor UI itself, not just in
-the docs. Possible shapes:
+Add a `[ ] Reviewed — order looks right` checkbox per scene that
+toggles green and is persisted — e.g. as a `reviewed: true` line in
+the scene file's YAML frontmatter, or as a sidecar
+`NN_<slug>.reviewed` marker file. Plays the same role as a
+code-review approval: captures the human checkpoint without
+requiring a code edit. Show the reviewed/unreviewed state next to
+each scene in `SceneList.vue` so the workspace tells you what's left
+to look at.
 
-- A short helper banner at the top of the per-scene extraction view
-  that reads something like *"Read through to confirm the moments are
-  in the right order. You only need to edit if something is wrong —
-  the LLM will not re-order."*
-- A `[ ] Reviewed — order looks right` checkbox per scene that toggles
-  green and is persisted (e.g. via a small marker in the scene file
-  frontmatter, or a sidecar `.reviewed` file). Plays the same role as
-  a code-review approval — captures the human checkpoint without
-  requiring a code edit.
-- Bonus: a "diff vs. previous extraction" view for re-runs, so the
-  reviewer can see what changed without re-reading the whole file.
+Bonus: a "diff vs. previous extraction" view for re-runs so the
+reviewer can see what changed without re-reading the whole file.
 
 **Where it lives**
 - `frontend/src/components/scene-editor/ExtractionEditor.vue` —
-  natural home for the banner and checkbox
+  add the checkbox alongside / replacing the dismissable banner
 - `frontend/src/components/scene-editor/SceneList.vue` — show the
   reviewed/unreviewed state next to each scene
-- `server/routers/scene_editor.py` — endpoint for persisting the
-  reviewed flag if we go the sidecar/frontmatter route
+- `server/routers/scene_editor.py` — endpoint for reading/writing
+  the reviewed flag (sidecar file or frontmatter mutation)
 
 **Why this matters**
 The whole pipeline is designed around the global rule "LLM extracts →
-human reviews → LLM renders." If users skip the review because they
-think it implies mandatory editing, the rule degrades to "LLM extracts
-→ LLM renders," which is exactly the failure mode the architecture
-exists to prevent.
+human reviews → LLM renders." A persistent reviewed marker turns the
+implicit "I scrolled through" into an explicit "I approved this
+scene," which is the actual checkpoint signal the rest of the
+pipeline depends on.
 
 ### [ ] scene_extract.py scaffolds keep raw player names instead of mapping to characters / GM
 
