@@ -93,9 +93,8 @@ def main() -> None:
     for scene_num, meta, body, path in scenes:
         scene_name = meta.get("scene_name") or humanise_slug(meta.get("slug", "scene"))
         narrator = meta.get("narrator", "")
-        header = f"## Scene {scene_num:02d} — {scene_name}"
-        attrib = f"*(narrated by {narrator})*\n" if narrator else ""
-        parts.append("---\n\n" + header + "\n" + attrib + "\n" + body)
+        header = f"## {narrator} — {scene_name}" if narrator else f"## {scene_name}"
+        parts.append("---\n\n" + header + "\n\n" + body)
 
     full_doc = "\n\n".join(parts) + "\n"
 
