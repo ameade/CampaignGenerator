@@ -14,6 +14,8 @@ const props = defineProps<{
   absolute?: boolean
   /** Which base directory to resolve relative paths against. Default: 'session'. */
   resolveBase?: ResolveBase
+  /** Explicit base dir for relative paths. Takes precedence over resolveBase. */
+  baseDir?: string
 }>()
 
 const emit = defineEmits<{
@@ -25,6 +27,10 @@ let checkTimer: ReturnType<typeof setTimeout> | null = null
 
 const resolvedPath = computed(() => {
   if (props.absolute) return props.modelValue.trim()
+  const raw = props.modelValue.trim()
+  if (props.baseDir && raw && !raw.startsWith('/') && !raw.startsWith('~')) {
+    return `${props.baseDir.replace(/\/+$/, '')}/${raw}`
+  }
   return resolvePathWithBase(props.modelValue, props.resolveBase || 'session')
 })
 

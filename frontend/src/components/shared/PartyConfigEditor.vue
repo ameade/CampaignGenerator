@@ -33,6 +33,16 @@ const canSave = computed(() => {
   return characters.value.every(c => c.name.trim() && c.sheet.trim())
 })
 
+// party.py's load_party_config resolves child paths against the YAML's
+// parent directory, so the UI must do the same — otherwise the green
+// existence check will pass for a path that the loader will reject.
+const yamlParentDir = computed(() => {
+  const p = props.configPath.trim()
+  if (!p) return ''
+  const i = p.lastIndexOf('/')
+  return i >= 0 ? p.slice(0, i) : ''
+})
+
 async function load() {
   if (!props.configPath.trim()) {
     status.value = { kind: 'err', text: 'Set the party config path first.' }
@@ -154,15 +164,15 @@ watch(() => props.configPath, () => {
               @update:model-value="(v: string) => (c.sheet = v)"
               label="Sheet (required)"
               required
-              resolve-base="campaign"
-              help="Path to character sheet markdown (e.g. docs/party/soma.md)."
+              :base-dir="yamlParentDir"
+              help="Path relative to the party.yaml directory (e.g. soma.md, or party/soma.md)."
             />
             <PathField
               :model-value="c.backstory"
               @update:model-value="(v: string) => (c.backstory = v)"
               label="Backstory"
-              resolve-base="campaign"
-              help="Optional. Path to backstory document."
+              :base-dir="yamlParentDir"
+              help="Optional. Path relative to the party.yaml directory."
             />
 
             <div class="arc-row">
@@ -181,8 +191,8 @@ watch(() => props.configPath, () => {
                 :model-value="c.arc_score"
                 @update:model-value="(v: string) => (c.arc_score = v)"
                 label="Arc score mechanic"
-                resolve-base="campaign"
-                help="Optional. Path to the arc score mechanic document."
+                :base-dir="yamlParentDir"
+                help="Optional. Path relative to the party.yaml directory."
               />
             </div>
           </div>
