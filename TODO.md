@@ -302,28 +302,6 @@ Pick one of the four candidate fixes documented in
 - `server/config.py:_SAVE_KEY_PREFIXES` — backend prefix filter that decides
   which keys land in `ui_config.yaml`
 
-### [ ] Log the subprocess command line instead of just streaming it
-
-**Context**
-`server/subprocess_runner.py:22-23` echoes the full
-`$ /path/to/python script.py --flag value \` command into the SSE
-stream. The command is genuinely useful for debugging — it's
-copy-pasteable for reproducing the run from a shell — but it currently
-only lives in the transient SSE output, not in any log file. Once the
-output buffer is cleared the command is gone.
-
-**What to do**
-Keep the SSE echo. Additionally write the command (and probably the
-returncode + duration) to a per-run log file under `logs/` so failed
-runs can be reproduced after the browser session is closed. The
-session-doc CLI already manages timestamped logs via
-`campaignlib.save_log` — the web runner should use the same scheme.
-
-**Where it lives**
-- `server/subprocess_runner.py` — wrap `stream_subprocess` to also
-  append to a log file
-- `campaignlib.save_log` — existing CLI log helper to mirror
-
 ### [ ] Scene Editor: signal that the review goal is "confirm order is right," not "re-order"
 
 **Context**
