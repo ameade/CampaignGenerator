@@ -302,44 +302,31 @@ Pick one of the four candidate fixes documented in
 - `server/config.py:_SAVE_KEY_PREFIXES` — backend prefix filter that decides
   which keys land in `ui_config.yaml`
 
-### [ ] Scene Editor: persist a per-scene "[x] Reviewed — order looks right" flag
+### [ ] Scene Editor: diff-vs-previous-extraction view for re-runs
 
 **Context**
-The dismissable banner now reminds users that the Stage 2 review is a
-**confirm-order** step, not a reorder step (see
-`docs/session_doc_pipeline.md` → "What 'review' means at the Stage 2 /
-scene-extraction checkpoint", and the peach banner at the top of
-`ExtractionEditor.vue`'s Extraction tab). The remaining piece is a
-durable per-scene approval marker so the user can see at a glance
-which scenes they have already validated.
+With the dismissable banner and the per-scene reviewed marker in
+place, the remaining nice-to-have for the Stage 2 review checkpoint
+is a way to see *what changed* when the user re-runs Stage 2 against
+the same VTT (e.g. after the spell-check pass updates a glossary).
+Today the reviewer has to re-read the whole extraction to spot what
+moved.
 
 **What to do**
-Add a `[ ] Reviewed — order looks right` checkbox per scene that
-toggles green and is persisted — e.g. as a `reviewed: true` line in
-the scene file's YAML frontmatter, or as a sidecar
-`NN_<slug>.reviewed` marker file. Plays the same role as a
-code-review approval: captures the human checkpoint without
-requiring a code edit. Show the reviewed/unreviewed state next to
-each scene in `SceneList.vue` so the workspace tells you what's left
-to look at.
-
-Bonus: a "diff vs. previous extraction" view for re-runs so the
-reviewer can see what changed without re-reading the whole file.
+Cache the prior extraction body (probably as `<extraction>.prev` or
+in a small sidecar dir) on each Stage-2 run, and surface a "Show
+diff vs. last run" toggle in `ExtractionEditor.vue` that renders the
+two against each other inline. Reset the reviewed marker when the
+diff is non-empty so the user can't accidentally keep an "approved"
+status across a re-run that changed content.
 
 **Where it lives**
-- `frontend/src/components/scene-editor/ExtractionEditor.vue` —
-  add the checkbox alongside / replacing the dismissable banner
-- `frontend/src/components/scene-editor/SceneList.vue` — show the
-  reviewed/unreviewed state next to each scene
-- `server/routers/scene_editor.py` — endpoint for reading/writing
-  the reviewed flag (sidecar file or frontmatter mutation)
-
-**Why this matters**
-The whole pipeline is designed around the global rule "LLM extracts →
-human reviews → LLM renders." A persistent reviewed marker turns the
-implicit "I scrolled through" into an explicit "I approved this
-scene," which is the actual checkpoint signal the rest of the
-pipeline depends on.
+- `server/routers/scene_editor.py` — endpoint that returns the
+  cached previous extraction text alongside the current one
+- `frontend/src/components/scene-editor/ExtractionEditor.vue` — the
+  diff view itself (a small library or hand-rolled line-diff)
+- Stage-2 runner — write the previous extraction to its sidecar
+  before overwriting
 
 ### [ ] scene_extract.py scaffolds keep raw player names instead of mapping to characters / GM
 

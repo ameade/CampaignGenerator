@@ -210,6 +210,7 @@ def _load_scenes() -> list[dict]:
             "has_extraction": bool(ext_path and ext_path.exists()),
             "has_output": has_output,
             "filename": ext_name,
+            "reviewed": _reviewed_for_path(ext_path),
         })
     return result
 
@@ -249,6 +250,7 @@ def _scenes_from_extractions() -> list[dict]:
             "has_extraction": True,
             "has_output": narr_path is not None and narr_path.exists(),
             "filename": f.name,
+            "reviewed": _reviewed_for_path(f),
         })
     return result
 
@@ -261,6 +263,26 @@ def _get_extraction_path(n: int) -> Path | None:
     if _using_new_flow():
         return _scene_extraction_file_new(n, s.get("scene", ""))
     return Path(CONFIG["extract_dir"]) / s["filename"] if CONFIG.get("extract_dir") else None
+
+
+def _reviewed_marker_path(n: int) -> Path | None:
+    """Sidecar marker file capturing the GM's "order looks right" approval.
+
+    Lives next to the extraction file as `<extraction>.reviewed`. The
+    file's existence is the signal; its contents are an empty string.
+    Sidecar (rather than frontmatter mutation) so the human-edited
+    extraction never gets rewritten by the toggle.
+    """
+    ext_path = _get_extraction_path(n)
+    if ext_path is None:
+        return None
+    return ext_path.with_name(ext_path.name + ".reviewed")
+
+
+def _reviewed_for_path(ext_path: Path | None) -> bool:
+    if ext_path is None:
+        return False
+    return ext_path.with_name(ext_path.name + ".reviewed").exists()
 
 
 def _get_roleplay_path(n: int) -> Path | None:
@@ -500,6 +522,35 @@ async def api_save_extraction(n: int, request: Request):
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(data["content"], encoding="utf-8")
     return {"ok": True}
+
+
+@router.get("/reviewed/{n}")
+def api_get_reviewed(n: int):
+    """True iff the GM has marked scene n's extraction as order-reviewed."""
+    marker = _reviewed_marker_path(n)
+    if marker is None:
+        return JSONResponse({"reviewed": False}, status_code=404)
+    return {"reviewed": marker.exists()}
+
+
+@router.put("/reviewed/{n}")
+async def api_set_reviewed(n: int, request: Request):
+    """Toggle the order-reviewed marker for scene n.
+
+    Body: ``{ "reviewed": bool }``. When true the sidecar file is
+    created (empty); when false it is removed if present. Idempotent.
+    """
+    marker = _reviewed_marker_path(n)
+    if marker is None:
+        return JSONResponse({"ok": False}, status_code=404)
+    data = await request.json()
+    if data.get("reviewed"):
+        marker.parent.mkdir(parents=True, exist_ok=True)
+        marker.touch(exist_ok=True)
+    else:
+        if marker.exists():
+            marker.unlink()
+    return {"ok": True, "reviewed": marker.exists()}
 
 
 @router.get("/roleplay/{n}")

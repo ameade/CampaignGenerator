@@ -248,6 +248,18 @@ async function loadScenes() {
   }
 }
 
+const currentSceneReviewed = computed(() => {
+  if (currentScene.value == null) return false
+  const s = scenes.value.find(sc => sc.index === currentScene.value)
+  return !!s?.reviewed
+})
+
+async function setReviewed(reviewed: boolean) {
+  if (currentScene.value == null) return
+  await apiPut(`/api/editor/reviewed/${currentScene.value}`, { reviewed })
+  await loadScenes()
+}
+
 async function selectScene(n: number) {
   currentScene.value = n
 
@@ -728,6 +740,7 @@ onMounted(async () => {
             :prose-mode="proseMode"
             :reflections="reflections"
             :use-enhanced-sections="useEnhancedSections"
+            :reviewed="currentSceneReviewed"
             @save-extraction="saveExtraction"
             @save-roleplay="saveRoleplay"
             @reload="reload"
@@ -738,6 +751,7 @@ onMounted(async () => {
             @update:prose-mode="proseMode = $event; apiPut('/api/editor/config', { prose_mode: $event || undefined })"
             @update:reflections="reflections = $event; apiPut('/api/editor/config', { reflections: $event || undefined })"
             @update:use-enhanced-sections="useEnhancedSections = $event"
+            @update:reviewed="setReviewed"
             @load-enhanced="loadEnhancedSections"
           />
           <NarrationOutput
