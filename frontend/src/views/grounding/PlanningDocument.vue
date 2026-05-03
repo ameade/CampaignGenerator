@@ -17,7 +17,6 @@ const summaries = ref('')
 const context = ref('')
 const output = ref('')
 const extractDir = ref('')
-const chunkSize = ref(60000)
 const splitChapters = ref('')
 const noLog = ref(false)
 const showAdvanced = ref(false)
@@ -26,7 +25,6 @@ const showAdvanced = ref(false)
 const dossierSummaries = ref('')
 const dossierDir = ref('')
 const dossierExtractDir = ref('')
-const dossierChunkSize = ref(60000)
 const dossierSplitChapters = ref('')
 const dossierSince = ref(0)
 
@@ -38,13 +36,11 @@ function loadFromConfig() {
   context.value = v.plan_context || ''
   output.value = v.plan_output || v.planning_output || v.planning || ''
   extractDir.value = v.plan_extract_dir || ''
-  chunkSize.value = v.plan_chunk_size || 60000
   splitChapters.value = v.plan_split_chapters || ''
 
   dossierSummaries.value = v.plan_build_summaries || v.summaries || ''
   dossierDir.value = v.plan_dossier_dir || 'docs/npcs/'
   dossierExtractDir.value = v.plan_build_extract_dir || ''
-  dossierChunkSize.value = v.plan_build_chunk_size || 60000
   dossierSplitChapters.value = v.plan_build_split_chapters || ''
 }
 
@@ -73,7 +69,6 @@ const synthParams = computed(() => ({
   context: contextList.value,
   output: output.value,
   extract_dir: extractDir.value,
-  chunk_size: chunkSize.value,
   split_chapters: splitChapters.value,
   no_log: noLog.value,
   model: config.model,
@@ -85,7 +80,6 @@ const dossierParams = computed(() => ({
   summaries: dossierSummaries.value,
   dossier_dir: dossierDir.value,
   extract_dir: dossierExtractDir.value,
-  chunk_size: dossierChunkSize.value,
   split_chapters: dossierSplitChapters.value,
   since: dossierSince.value,
   no_log: noLog.value,
@@ -181,13 +175,7 @@ onMounted(() => { loadFromConfig() })
             <label class="field-label">Split by session prefix</label>
             <input type="text" class="field-input" v-model="splitChapters"
               placeholder="e.g. # Session — splits at each session heading" />
-            <span class="field-help">When set, each session becomes one extract chunk. Overrides chunk size.</span>
-          </div>
-          <div class="field">
-            <label class="field-label">Chunk size (chars)</label>
-            <input type="number" class="field-input" v-model.number="chunkSize" min="10000" step="5000"
-              :disabled="!!splitChapters" />
-            <span class="field-help">Ignored when split-by-prefix is set. Default 60,000.</span>
+            <span class="field-help">When set, each session becomes one extract chunk.</span>
           </div>
           <div class="field">
             <label class="checkbox-label">
@@ -236,13 +224,7 @@ onMounted(() => { loadFromConfig() })
             <label class="field-label">Split by session prefix</label>
             <input type="text" class="field-input" v-model="dossierSplitChapters"
               placeholder="e.g. # Session — splits at each session heading" />
-            <span class="field-help">When set, each session becomes one extract chunk. Overrides chunk size.</span>
-          </div>
-          <div class="field">
-            <label class="field-label">Chunk size (chars)</label>
-            <input type="number" class="field-input" v-model.number="dossierChunkSize" min="10000" step="5000"
-              :disabled="!!dossierSplitChapters" />
-            <span class="field-help">Ignored when split-by-prefix is set. Default 60,000.</span>
+            <span class="field-help">When set, each session becomes one extract chunk.</span>
           </div>
           <div class="field">
             <label class="field-label">Since chunk N (incremental)</label>

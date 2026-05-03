@@ -11,7 +11,6 @@ const query = ref('')
 const hitsOnly = ref(false)
 const verbose = ref(false)
 const output = ref('')
-const chunkSize = ref(40000)
 const showAdvanced = ref(false)
 
 function loadFromConfig() {
@@ -29,7 +28,6 @@ const runParams = computed(() => ({
   hits_only: hitsOnly.value,
   verbose: verbose.value,
   output: output.value,
-  chunk_size: chunkSize.value,
   model: config.model,
 }))
 
@@ -73,11 +71,6 @@ onMounted(() => { loadFromConfig() })
         <div v-if="showAdvanced" class="advanced-panel">
           <PathField v-model="output" label="Output file" is-output resolve-base="campaign"
             help="Save the answer to a file." />
-          <div class="field">
-            <label class="field-label">Chunk size (chars)</label>
-            <input type="number" class="field-input" v-model.number="chunkSize" min="10000" step="5000" />
-            <div class="field-help">Smaller chunks = more precise hits (default: 40,000)</div>
-          </div>
           <div class="field">
             <label class="checkbox-label">
               <input type="checkbox" v-model="verbose" />

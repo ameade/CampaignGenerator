@@ -20,7 +20,6 @@ const arcScores = ref('')
 const context = ref('')
 const output = ref('')
 const extractDir = ref('')
-const chunkSize = ref(60000)
 const splitChapters = ref('')
 const noLog = ref(false)
 const showAdvanced = ref(false)
@@ -35,7 +34,6 @@ function loadFromConfig() {
   context.value = v.party_context || ''
   output.value = v.party_output || v.party || ''
   extractDir.value = v.party_extract_dir || ''
-  chunkSize.value = v.party_chunk_size || 60000
   splitChapters.value = v.party_split_chapters || ''
   // Persisted mode wins; otherwise default to 'config' if a YAML path is set,
   // else fall back to 'flat' so legacy workspaces still see the old form.
@@ -78,7 +76,6 @@ const runParams = computed(() => {
     context: contextFiles.value,
     output: output.value,
     extract_dir: extractDir.value,
-    chunk_size: chunkSize.value,
     split_chapters: splitChapters.value,
     no_log: noLog.value,
     model: config.model,
@@ -192,13 +189,7 @@ onMounted(() => { loadFromConfig() })
             <label class="field-label">Split by session prefix</label>
             <input type="text" class="field-input" v-model="splitChapters"
               placeholder="e.g. # Session — splits at each session heading" />
-            <span class="field-help">When set, each session becomes one extract chunk. Overrides chunk size.</span>
-          </div>
-          <div class="field">
-            <label class="field-label">Chunk size (chars)</label>
-            <input type="number" class="field-input" v-model.number="chunkSize" min="10000" step="5000"
-              :disabled="!!splitChapters" />
-            <span class="field-help">Ignored when split-by-prefix is set. Default 60,000.</span>
+            <span class="field-help">When set, each session becomes one extract chunk.</span>
           </div>
           <div class="field">
             <label class="checkbox-label">

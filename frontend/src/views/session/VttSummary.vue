@@ -18,7 +18,6 @@ const vttOutput = ref('')
 const roleplayOutput = ref('')
 const synthOnly = ref(false)
 const extractDir = ref('')
-const chunkSize = ref(50000)
 const noLog = ref(false)
 const showAdvanced = ref(false)
 
@@ -31,7 +30,6 @@ function loadFromConfig() {
   vttOutput.value = v.vtt_output || ''
   roleplayOutput.value = v.vtt_roleplay_output || ''
   extractDir.value = v.vtt_extract_dir || ''
-  chunkSize.value = v.vtt_chunk_size || 50000
 
   // Build reference summaries from GM recap + any existing
   const refs: string[] = []
@@ -62,7 +60,6 @@ const runParams = computed(() => ({
   context: contextFiles.value,
   reference_summaries: referenceFiles.value,
   extract_dir: resolvePath(extractDir.value),
-  chunk_size: chunkSize.value,
   synthesize_only: synthOnly.value,
   no_log: noLog.value,
   model: config.model,
@@ -165,10 +162,6 @@ onMounted(() => {
             label="Extractions directory override"
             help="Override where extract_NNN.md files are saved/loaded. Normally auto-derived."
           />
-          <div class="field">
-            <label class="field-label">Chunk size (chars)</label>
-            <input type="number" class="field-input" v-model.number="chunkSize" min="10000" step="5000" />
-          </div>
           <div class="field">
             <label class="checkbox-label">
               <input type="checkbox" v-model="noLog" />
