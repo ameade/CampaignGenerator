@@ -9,7 +9,6 @@ const config = useConfigStore()
 const input = ref('')
 const output = ref('')
 const extractDir = ref('')
-const chunkSize = ref(60000)
 const splitChapters = ref('')
 const noLog = ref(false)
 const showAdvanced = ref(false)
@@ -19,7 +18,6 @@ function loadFromConfig() {
   input.value = v.distill_input || v.summaries || ''
   output.value = v.distill_output || v.world_state_output || v.world_state || ''
   extractDir.value = v.distill_extract_dir || ''
-  chunkSize.value = v.distill_chunk_size || 60000
   splitChapters.value = v.distill_split_chapters || ''
 }
 
@@ -31,7 +29,6 @@ const runParams = computed(() => ({
   input: input.value,
   output: output.value,
   extract_dir: extractDir.value,
-  chunk_size: chunkSize.value,
   split_chapters: splitChapters.value,
   no_log: noLog.value,
   model: config.model,
@@ -84,13 +81,7 @@ onMounted(() => { loadFromConfig() })
             <label class="field-label">Split by chapter prefix</label>
             <input type="text" class="field-input" v-model="splitChapters"
               placeholder="e.g. # Chapter — splits at each chapter heading" />
-            <span class="field-help">When set, each chapter becomes one extract chunk. Overrides chunk size.</span>
-          </div>
-          <div class="field">
-            <label class="field-label">Chunk size (chars)</label>
-            <input type="number" class="field-input" v-model.number="chunkSize" min="10000" step="5000"
-              :disabled="!!splitChapters" />
-            <span class="field-help">Ignored when split-by-prefix is set. Default 60,000.</span>
+            <span class="field-help">When set, each chapter becomes one extract chunk.</span>
           </div>
           <div class="field">
             <label class="checkbox-label">

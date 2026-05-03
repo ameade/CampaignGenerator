@@ -11,7 +11,6 @@ const output = ref('')
 const trackFile = ref('')
 const trackInline = ref('')
 const extractDir = ref('')
-const chunkSize = ref(60000)
 const splitChapters = ref('')
 const noLog = ref(false)
 const showAdvanced = ref(false)
@@ -22,7 +21,6 @@ function loadFromConfig() {
   output.value = v.cs_output || v.campaign_state_output || v.campaign_state || ''
   trackFile.value = v.cs_track_file || v.tracking_file || ''
   extractDir.value = v.cs_extract_dir || ''
-  chunkSize.value = v.cs_chunk_size || 60000
   splitChapters.value = v.cs_split_chapters || ''
 }
 
@@ -40,7 +38,6 @@ const runParams = computed(() => ({
   track_file: trackFile.value,
   track: trackItems.value,
   extract_dir: extractDir.value,
-  chunk_size: chunkSize.value,
   split_chapters: splitChapters.value,
   no_log: noLog.value,
   model: config.model,
@@ -103,13 +100,7 @@ onMounted(() => { loadFromConfig() })
             <label class="field-label">Split by session prefix</label>
             <input type="text" class="field-input" v-model="splitChapters"
               placeholder="e.g. # Session — splits at each session heading" />
-            <span class="field-help">When set, each session becomes one extract chunk. Overrides chunk size.</span>
-          </div>
-          <div class="field">
-            <label class="field-label">Chunk size (chars)</label>
-            <input type="number" class="field-input" v-model.number="chunkSize" min="10000" step="5000"
-              :disabled="!!splitChapters" />
-            <span class="field-help">Ignored when split-by-prefix is set. Default 60,000.</span>
+            <span class="field-help">When set, each session becomes one extract chunk.</span>
           </div>
           <div class="field">
             <label class="checkbox-label">
