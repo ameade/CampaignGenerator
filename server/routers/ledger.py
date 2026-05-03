@@ -221,22 +221,26 @@ def _normalize_speaker(raw: str) -> str:
     return name
 
 
-def _parse_stage2_scaffold(stage2_text: str) -> tuple[list[str], list[tuple[str, str, str]]]:
+def _parse_stage2_scaffold(stage2_text: str) -> tuple[list[str], list[tuple[str, str, str, str]]]:
     """Parse a Stage-2 file into (beats, quotes).
 
     `beats` is the list of `- ...` bullet lines from the
     `## Scene summary (from gm-assist, verbatim)` section.
 
-    `quotes` is a list of (speaker, context, quote_text) tuples parsed
-    from the `## Verbatim moments` section. We look for blocks shaped:
+    `quotes` is a list of (group, speaker, context, quote_text) tuples
+    parsed from the `## Verbatim moments` section. We look for blocks
+    shaped:
 
+        **[Sub-scene tag]**
         **Speaker** — *context*
         > "quote text"
         > "continuation"
 
-    Continuations attach to the preceding speaker block. Sub-scene tag
-    headers (`**[Scene tag — ...]**`) are dropped. OOC filtering is
-    intentionally NOT applied here — the human prunes by hand.
+    `group` is the most recent `**[...]**` sub-scene tag (empty string
+    until the first one is seen, or after a tag without a body). The
+    tag is preserved so the scaffold can render it as a beat header.
+    OOC filtering is intentionally NOT applied here — the human prunes
+    by hand.
     """
     lines = stage2_text.splitlines()
 
@@ -262,16 +266,19 @@ def _parse_stage2_scaffold(stage2_text: str) -> tuple[list[str], list[tuple[str,
         (v for k, v in sections.items() if k.startswith("verbatim moments")),
         []
     )
-    quotes: list[tuple[str, str, str]] = []
+    quotes: list[tuple[str, str, str, str]] = []
+    group = ""
     speaker = ""
     context = ""
     speaker_re = re.compile(r"^\*\*([^*]+)\*\*\s*(?:—|--|-)?\s*(?:\*([^*]*)\*)?\s*$")
-    sub_scene_re = re.compile(r"^\*\*\[.*\]\*\*\s*$")
+    sub_scene_re = re.compile(r"^\*\*\[(.+)\]\*\*\s*$")
     for ln in moments:
         s = ln.rstrip()
         if not s:
             continue
-        if sub_scene_re.match(s):
+        m_sub = sub_scene_re.match(s)
+        if m_sub:
+            group = m_sub.group(1).strip()
             speaker = ""
             context = ""
             continue
@@ -285,7 +292,7 @@ def _parse_stage2_scaffold(stage2_text: str) -> tuple[list[str], list[tuple[str,
             if quote_text.startswith('"') and quote_text.endswith('"'):
                 quote_text = quote_text[1:-1]
             if speaker and quote_text:
-                quotes.append((speaker, context, quote_text))
+                quotes.append((group, speaker, context, quote_text))
     return beats, quotes
 
 
@@ -371,12 +378,27 @@ async def _stream_generate_extraction(scene_num: int) -> AsyncGenerator[str, Non
                 "",
             ]
 
-        for speaker, ctx, text in parsed_quotes:
+        prev_group: str | None = None
+        prev_key: tuple[str, str] | None = None
+        for group, speaker, ctx, text in parsed_quotes:
             speaker_norm = _normalize_speaker(speaker)
-            if ctx:
-                lines.append(f"<!-- {ctx} -->")
+            if group != prev_group:
+                if prev_group is not None:
+                    lines.append("")
+                if group:
+                    lines.append(f"### [{group}]")
+                    lines.append("")
+                prev_key = None
+            key = (speaker_norm, ctx)
+            if key != prev_key:
+                if prev_key is not None:
+                    lines.append("")
+                if ctx:
+                    lines.append(f"<!-- {ctx} -->")
             lines.append(f'{speaker_norm}: "{text}"')
-            lines.append("")
+            prev_key = key
+            prev_group = group
+        lines.append("")
 
         content = "\n".join(lines)
         scaffold_path = _scaffold_path_for(scene_num, scene_name)
@@ -456,15 +478,21 @@ async def _stream_generate_extraction(scene_num: int) -> AsyncGenerator[str, Non
             "",
         ]
 
+    prev_key: tuple[str, str] | None = None
     for q in quotes:
         raw_speaker = q.get("character") or q.get("speaker") or "Unknown"
         speaker = _normalize_speaker(raw_speaker)
         text = q["quote_text"]
         context = q.get("context", "")
-        if context:
-            lines.append(f"<!-- {context} -->")
+        key = (speaker, context)
+        if key != prev_key:
+            if prev_key is not None:
+                lines.append("")
+            if context:
+                lines.append(f"<!-- {context} -->")
         lines.append(f'{speaker}: "{text}"')
-        lines.append("")
+        prev_key = key
+    lines.append("")
 
     content = "\n".join(lines)
 
