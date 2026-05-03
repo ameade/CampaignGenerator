@@ -770,6 +770,78 @@ def test_extract_character_roster_multi_player():
     assert "Wade/Kostadis" in roster
 
 
+# ── campaignlib.extract_player_character_map ───────────────────────────────
+
+def test_extract_player_character_map_basic():
+    import campaignlib
+    m = campaignlib.extract_player_character_map(PARTY_TEXT)
+    assert m["Wade"] == "Soma"
+    assert m["Kostadis"] == "Vukradin"
+    # Valphine has no player → no entry for her
+    assert "Valphine" not in m
+
+
+def test_extract_player_character_map_multi_player():
+    import campaignlib
+    text = "## Soma\n**Tortle Druid 5, Player: Wade/Kostadis**\n"
+    m = campaignlib.extract_player_character_map(text)
+    assert m == {"Wade": "Soma", "Kostadis": "Soma"}
+
+
+def test_extract_player_character_map_empty():
+    import campaignlib
+    assert campaignlib.extract_player_character_map("") == {}
+
+
+# ── campaignlib.normalize_vtt_speakers ─────────────────────────────────────
+
+def test_normalize_vtt_speakers_rewrites_player_to_character():
+    import campaignlib
+    vtt = "Mike Hall: We can put her in the bag of holding.\nThorin: Let's roll.\n"
+    out = campaignlib.normalize_vtt_speakers(
+        vtt, player_map={"Mike Hall": "Daz"}
+    )
+    assert out.startswith("Daz: We can put her")
+    # Existing character-named line is untouched
+    assert "Thorin: Let's roll." in out
+
+
+def test_normalize_vtt_speakers_rewrites_gm_player_to_GM():
+    import campaignlib
+    vtt = "Kostadis: The cave grows colder.\nDaz: I draw my axe.\n"
+    out = campaignlib.normalize_vtt_speakers(vtt, gm_player="Kostadis")
+    assert out.startswith("GM: The cave grows colder.")
+    assert "Daz: I draw my axe." in out
+
+
+def test_normalize_vtt_speakers_longer_names_match_first():
+    """A player named "Mike" must not steal lines from "Mike Hall"."""
+    import campaignlib
+    vtt = "Mike Hall: stealth.\nMike: perception.\n"
+    out = campaignlib.normalize_vtt_speakers(
+        vtt, player_map={"Mike": "Bob", "Mike Hall": "Daz"}
+    )
+    lines = out.splitlines()
+    assert lines[0] == "Daz: stealth."
+    assert lines[1] == "Bob: perception."
+
+
+def test_normalize_vtt_speakers_only_label_not_body():
+    """Player names appearing inside the dialogue body are NOT rewritten."""
+    import campaignlib
+    vtt = 'Mike Hall: I tell Mike Hall I love him.\n'
+    out = campaignlib.normalize_vtt_speakers(
+        vtt, player_map={"Mike Hall": "Daz"}
+    )
+    assert out == "Daz: I tell Mike Hall I love him."
+
+
+def test_normalize_vtt_speakers_no_op_without_inputs():
+    import campaignlib
+    vtt = "Foo: bar\n"
+    assert campaignlib.normalize_vtt_speakers(vtt) == vtt
+
+
 # ── session_doc.load_voice_files ────────────────────────────────────────────
 
 def test_load_voice_files(tmp_path):

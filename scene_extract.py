@@ -37,11 +37,13 @@ from campaignlib import (
     build_batch_request,
     build_scene_extraction_system_prompt,
     collect_batch,
+    extract_player_character_map,
     format_batch_progress,
     format_npc_roster,
     format_scene_output,
     load_alias_map,
     make_client,
+    normalize_vtt_speakers,
     parse_gmassist_scenes,
     plan_scene_extraction,
     poll_batch,
@@ -246,6 +248,16 @@ def main() -> None:
                              "rewritten to canonical names in the VTT before "
                              "extraction; the canonical NPC roster is appended "
                              "to the system prompt.")
+    parser.add_argument("--party", metavar="FILE", default=None,
+                        help="party.md path. When set, player → character "
+                             "mappings are parsed from the `**Class, Player: "
+                             "Name**` lines and used to rewrite speaker "
+                             "labels in the VTT before the LLM sees it.")
+    parser.add_argument("--gm-player", metavar="NAME", default=None,
+                        help="Display name the GM appears under in the VTT "
+                             "(e.g. 'Kostadis'). Rewritten to 'GM:' before "
+                             "extraction. Without this flag the GM's lines "
+                             "stay under their player name.")
     parser.add_argument("--model", default="claude-sonnet-4-6")
     parser.add_argument("--fast", action="store_true",
                         help="Use Haiku instead of Sonnet (~4x cheaper, faster)")
@@ -328,6 +340,38 @@ def main() -> None:
         print(f"Error: no dialogue found in VTT file: {vtt_path.name}", file=sys.stderr)
         sys.exit(1)
     print(f"  → {len(dialogue):,} chars of dialogue")
+
+    # ── Player → character speaker normalisation ────────────────────────────
+    # The LLM's existing "Character (Player) → strip the parenthetical"
+    # rule only fires when the VTT actually carries the parenthetical
+    # disambiguation. Zoom captions emit raw display names. Rewrite them
+    # deterministically here so who-said-what is locked in by the
+    # human-curated party.md, not inferred from the transcript.
+    player_map: dict[str, str] = {}
+    if args.party:
+        party_path = Path(args.party).expanduser()
+        if not party_path.exists():
+            print(f"Error: party file not found: {party_path}", file=sys.stderr)
+            sys.exit(1)
+        player_map = extract_player_character_map(party_path.read_text(encoding="utf-8"))
+        if player_map:
+            mapping_str = ", ".join(f"{p}→{c}" for p, c in sorted(player_map.items()))
+            print(f"  Player → character map ({len(player_map)}): {mapping_str}")
+        else:
+            print(f"  Warning: --party {party_path.name} produced an empty player map "
+                  f"(no `**..., Player: ...**` lines found)", file=sys.stderr)
+    if args.gm_player:
+        print(f"  GM player → GM: {args.gm_player}")
+    if player_map or args.gm_player:
+        before = len(dialogue)
+        dialogue = normalize_vtt_speakers(dialogue, player_map, args.gm_player)
+        # Quick visibility — count how many lines changed by re-running
+        # the prefix check; cheaper than diffing.
+        changed = sum(
+            1 for line in dialogue.splitlines()
+            if any(line.startswith(f"{c}:") for c in set(player_map.values()) | {"GM"})
+        )
+        print(f"  Speaker labels rewritten: {changed} line(s); dialogue {before:,} → {len(dialogue):,} chars")
 
     summary_path = Path(args.summary).expanduser()
     if not summary_path.exists():

@@ -328,69 +328,29 @@ status across a re-run that changed content.
 - Stage-2 runner — write the previous extraction to its sidecar
   before overwriting
 
-### [ ] scene_extract.py scaffolds keep raw player names instead of mapping to characters / GM
+### [ ] Wire `--party` / `--gm-player` into the web UI scene-extraction run
 
 **Context**
-A scaffold from `scene_extract.py` for OotA session 20260427 contains
-speaker labels like:
-
-```
-Kostadis: "so you shove a mushroom down her throat..."
-Mike Hall: "We can put her in the bag of holding with Glabbagool..."
-Ben Pfaff: "I thought bags of holding could on… supply."
-Gabe: "There you go."
-Thorin: "Now, do we have a mushroom to grow her again?"
-```
-
-Those should always normalize to:
-
-- `Kostadis` → `GM`
-- `Mike Hall` → `Daz` (his PC)
-- `Ben Pfaff` → `Grygum` (his PC)
-- `Gabe` → `Zalthir` (his PC)
-- `Thorin` → `Thorin` (already a character name; leave alone)
-
-The system prompt at `scene_extract.py:90-93` already tries to handle
-this:
-```
-- "GM (Name)" / "DM (Name)" / "Name (GM)" / "Name (DM)" → write as "GM"
-- "Character (Player)" → strip the parenthetical; keep the character name
-```
-But that only works when the VTT has parenthetical disambiguation. Zoom
-captions emit only the speaker's display name — usually the player's
-real name — so the model has no signal to do the mapping. The result
-is raw human names leaking into the scaffold and (eventually) into
-narration.
+`scene_extract.py` now accepts `--party FILE` and `--gm-player NAME`
+to deterministically rewrite Zoom display names → character / GM
+labels before the LLM sees the transcript (closes the
+who-said-what attribution gap from the original TODO). The CLI side
+is done; the web UI's Stage 2 button does not yet pass these flags
+through, so users running scene extraction from the browser still
+get raw player names in scaffolds.
 
 **What to do**
-Hand `scene_extract.py` an explicit player→character roster and rewrite
-labels deterministically before the LLM ever sees the transcript (or at
-minimum inject the roster into the system prompt as a hard mapping
-table the model is told to apply).
-
-`session_doc.py:367` already has `extract_character_roster(party_text)`
-that builds `- Soma (Wade): Tortle Druid 5` lines from `party.md`. The
-same parser can produce a `{player_name: character_name}` dict. The GM
-mapping needs to come from somewhere — either a per-campaign config
-key (`gm_player_name: Kostadis`) or auto-detected as "the most-frequent
-speaker in the VTT who is not in the player→character map."
-
-**Where it lives**
-- `scene_extract.py:90-93` — speaker normalization prompt block
-- `scene_extract.py:122-131` — `_submit_pending` builds the system
-  prompt; this is where the mapping table should land
-- `session_doc.py:367` — existing roster parser to reuse
-- `campaignlib.py` / config — likely home for a `gm_player_name` field
-
-**Why this matters**
-Player names in scaffolds become player names in narration unless
-caught by manual edit. That breaks immersion and forces the human
-reviewer to do mechanical find-replace work that the pipeline could
-do deterministically before the LLM call. It also violates the
-attribution rule from `~/.claude/CLAUDE.md`: who-said-what is a
-precision decision, not a render decision — it should be locked in by
-the human-verified party config, not inferred by the LLM from raw
-transcript names.
+- Pass `--party <party_config_path>` and `--gm-player <gm_player>`
+  from `server/routers/scene_editor.py:_build_extract_cmd`. Pull the
+  party path from `CONFIG['party_config_path']` (already saved by
+  the Party Document page) and add a `gm_player` config key.
+- Surface a single `gm_player` text field on `SessionConfig.vue` so
+  the user types their Zoom display name once per campaign. Persist
+  via the existing `apiPut('/api/config/')` flow.
+- When `--party` resolves to a `party.yaml` file rather than a
+  `party.md`, the loader currently expects party.md syntax. Either
+  derive `party.md` from `party.yaml` first, or extend
+  `extract_player_character_map` to read both.
 
 ### [ ] Generalize `--since` (per-chunk re-extract) to all extract→synthesize pipelines
 
