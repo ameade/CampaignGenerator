@@ -125,6 +125,35 @@ python assemble.py "$SESS/narration/" \
 
 Why four stages: the global rule is "LLM extracts → human reviews and imposes structure → LLM renders inside that structure." Each stage is the LLM doing one thing the human can verify before the next call inherits its output. Per-scene narration files mean a single bad voice take only requires re-running that scene, not the whole session.
 
+### What "review" means at the Stage 2 / scene-extraction checkpoint
+
+Each `scene_extractions/NN_<slug>.md` has two sections, parsed by
+`_split_scene_body` (`session_doc.py:430`):
+
+1. `## Scene summary (from gm-assist, verbatim)` — the structural skeleton
+   for Pass 5.
+2. `## Verbatim moments` — the VTT-derived quotes / action beats that Pass
+   5 narrates over.
+
+Pass 5's prompt explicitly tells the model not to reorder events: *"The
+scene scope defines the authoritative event order — do not reorder, skip,
+or reorganise events"* (`session_doc.py:275-276`). So Pass 5 is a
+**renderer over two pre-anchored inputs**, not a rearranger.
+
+Practical implication for the human review step:
+
+- **Reading through and confirming the moments are in a sane order is the
+  checkpoint.** If the order already reads right, you do not need to edit
+  anything. The VTT is timestamped, so the extracted moments are already
+  roughly chronological; the LLM follows the order it is given.
+- **Edits are only required when something is actually wrong.** Examples:
+  an interleaved exchange that should be tightened, a moment that is out
+  of order relative to the scene's arc, a stray line that belongs in a
+  different scene, a hallucinated quote, a missing beat the GM remembers
+  but the VTT garbled.
+- A "no edits needed" review pass is a valid outcome. It is not a sign
+  you skipped the checkpoint — it is the checkpoint succeeding.
+
 ### Batch mode (`--batch`) — 50% off list price
 
 Stages 1 and 2 both accept `--batch`, which routes the call(s) through Anthropic's Message Batches API. Pricing is half list, prompt caching still applies (so Stage 2's per-scene cache hits compound on top of the discount), and results typically return in minutes — 24 h SLA worst case. The tradeoff is no live token streaming.

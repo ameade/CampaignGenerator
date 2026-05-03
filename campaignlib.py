@@ -66,7 +66,7 @@ def prepare_chunks(
     split_label — word used in the progress line when splitting by prefix
                   (e.g. "session", "chapter"). Defaults to "section".
     """
-    text = strip_base64_images(text)
+    text = strip_base64_images(text).lstrip("﻿")
     if split_chapters:
         chunks = chunk_by_chapters(text, split_chapters)
         print(f"  {len(chunks)} {split_label}(s) to process (split on: {split_chapters!r})\n")
