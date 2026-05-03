@@ -475,52 +475,6 @@ isolated to the latest extract. `--since` turns the synthesis step
 from O(history) into O(new) — same payoff `--build-dossiers` already
 delivers for planning.
 
-### [ ] Remove "Chunk size (chars)" UI control from the web — keep CLI only
-
-**Context**
-Every extract→synthesize page in the web UI exposes a "Chunk size
-(chars)" number input with a default of 40k–60k. That control is an
-artifact of an earlier implementation when chunk sizing was something
-the user routinely tuned. The current pipelines either auto-size or
-work fine at the default; users do not need (and probably should not
-touch) this knob from the web UI. The CLI still exposes
-`--chunk-size` for power-user / debugging cases — that stays.
-
-**Where it lives**
-Remove the field, the local ref, the `loadFromConfig` line, and the
-`runParams` entry from each of these pages:
-
-- `frontend/src/views/grounding/CampaignState.vue:14, 25, 43, 109-110`
-- `frontend/src/views/grounding/DistillWorldState.vue:12, 22, 34, 90-91`
-  (also the linked `splitChapters` enable/disable behavior on the
-  chunk-size input)
-- `frontend/src/views/grounding/PartyDocument.vue:23, 38, 81, 198-199`
-- `frontend/src/views/grounding/PlanningDocument.vue:20, 41, 47, 76,
-  88, 187-188, 242` (two chunk-size fields — synthesis and
-  build-dossiers)
-- `frontend/src/views/session/VttSummary.vue:21, 34, 65, 169-170`
-- `frontend/src/views/prep/QuerySummaries.vue:14, 32, 77-78`
-
-The corresponding `cs_chunk_size`, `distill_chunk_size`,
-`party_chunk_size`, `plan_chunk_size`, `plan_build_chunk_size`,
-`vtt_chunk_size`, `query_chunk_size` keys can be left in
-`ui_config.yaml` for now (harmless if unread) or stripped from the
-backend save filter — pick one and be consistent.
-
-**What stays untouched**
-- CLI: `python distill.py ... --chunk-size N`, etc., keep working.
-- `server/routers/grounding.py` and `session_workflow.py`:
-  - either drop the `chunk_size` query parameter, or
-  - keep it accepting the value with a sensible default so old
-    clients don't break — but stop sending it from the web UI.
-  Pick whichever is less risky to ship.
-
-**Why this matters**
-The web UI should expose decisions a user routinely makes. Tuning
-chunk size isn't one of them — it's a debugging knob, and surfacing
-it at the same visual weight as "input file" and "output file" makes
-the form feel more complicated than the workflow actually is.
-
 ### [ ] Default "Split by session prefix" to `# Chapter` (per-campaign config)
 
 **Context**
