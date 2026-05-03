@@ -7,6 +7,7 @@ export interface Scene {
   has_extraction: boolean
   has_output: boolean
   filename: string
+  reviewed?: boolean
 }
 
 const props = defineProps<{
@@ -51,6 +52,7 @@ const emit = defineEmits<{
             {{ quoteCounts[s.index] }} quotes
           </span>
           <span v-if="s.has_extraction" class="badge b-ext">Extracted</span>
+          <span v-if="s.reviewed" class="badge b-rev" title="Order reviewed">&#x2713; Reviewed</span>
           <span v-if="s.has_output" class="badge b-nar">Narrated</span>
         </div>
       </div>
@@ -125,6 +127,7 @@ const emit = defineEmits<{
 }
 .b-quotes { background: #2a1e3a; color: var(--mauve); }
 .b-ext { background: #1e3a5f; color: var(--blue); }
+.b-rev { background: #2a3a1e; color: #a6d189; }
 .b-nar { background: #1e3a2a; color: var(--green); }
 
 .scene-actions {

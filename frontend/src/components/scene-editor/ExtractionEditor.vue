@@ -18,6 +18,7 @@ const props = defineProps<{
   proseMode: boolean
   reflections: boolean
   useEnhancedSections: boolean
+  reviewed: boolean
 }>()
 
 const emit = defineEmits<{
@@ -31,6 +32,7 @@ const emit = defineEmits<{
   'update:proseMode': [value: boolean]
   'update:reflections': [value: boolean]
   'update:useEnhancedSections': [value: boolean]
+  'update:reviewed': [value: boolean]
   'load-enhanced': []
 }>()
 
@@ -209,6 +211,14 @@ function openTypora() {
           @change="emit('update:useEnhancedSections', ($event.target as HTMLInputElement).checked)" />
         Enhanced
       </label>
+      <label class="prose-toggle reviewed-toggle"
+             :class="{ on: reviewed }"
+             title="Mark this scene's extraction order as reviewed">
+        <input type="checkbox" :checked="reviewed"
+          :disabled="!hasExtraction"
+          @change="emit('update:reviewed', ($event.target as HTMLInputElement).checked)" />
+        Reviewed
+      </label>
       <span class="save-flash" :class="{ show: saveFlash }">Saved</span>
       <span style="flex:1"></span>
       <button class="btn-neutral btn-sm" :disabled="!hasExtraction" @click="emit('open-typora', 'output')">
@@ -324,6 +334,7 @@ function openTypora() {
   user-select: none;
 }
 .prose-toggle input { cursor: pointer; }
+.prose-toggle.reviewed-toggle.on { color: #a6d189; font-weight: 600; }
 
 .review-banner {
   display: flex;
