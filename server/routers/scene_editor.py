@@ -364,6 +364,22 @@ def _build_reextract_cmd(batch: bool = False) -> list[str] | tuple[None, str]:
     ]
     if CONFIG.get("dossier_dir"):
         cmd += ["--dossier-dir", CONFIG["dossier_dir"]]
+    # Pass party.md so scene_extract.py can rewrite Zoom display names to
+    # character / GM labels deterministically before the LLM sees the VTT.
+    # `party` is the synthesized party.md path (set by the Party Document
+    # page); the player→character map is parsed from its `**<Class>,
+    # Player: <Player>**` lines.
+    if CONFIG.get("party"):
+        cmd += ["--party", CONFIG["party"]]
+    # `sd_gm_player` lives in ui_config.yaml (set by SessionConfig.vue).
+    # Read at request time — CONFIG is frozen at server startup, but the
+    # GM player name is a per-campaign field the user may set after
+    # launching the server.
+    from server.config import load_ui_config
+    ui_cfg = load_ui_config()
+    gm_player = (ui_cfg.get("sd_gm_player") or "").strip()
+    if gm_player:
+        cmd += ["--gm-player", gm_player]
     if batch:
         cmd.append("--batch")
     return cmd
