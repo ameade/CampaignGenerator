@@ -207,10 +207,10 @@ def build_synthesize_system(tracked_items: list[str]) -> str:
 def main() -> None:
     parser = argparse.ArgumentParser(
         description="Generate a campaign_state.md (completed content + current NPC states) "
-                    "from session summaries."
+                    "from the canonical timeline."
     )
     parser.add_argument("input", nargs="?",
-                        help="Session summaries file (not needed with --synthesize-only)")
+                        help="Canonical timeline — the master narrative bible (not needed with --synthesize-only)")
     parser.add_argument("--output", "-o", required=True, metavar="FILE",
                         help="Where to save the campaign state document")
     parser.add_argument("--track-file", metavar="FILE",

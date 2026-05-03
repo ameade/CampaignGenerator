@@ -149,8 +149,8 @@ onMounted(() => { loadFromConfig() })
 
       <!-- Summaries (both modes) -->
       <div class="form-section">
-        <PathField v-model="summaries" label="Session summaries file" resolve-base="campaign"
-          help="Optional. Omit to skip the Extract pass (characters-only mode)." />
+        <PathField v-model="summaries" label="Canonical timeline" resolve-base="campaign"
+          help="The master narrative bible. Optional — omit to skip the Extract pass (characters-only mode)." />
       </div>
 
       <div class="form-section">

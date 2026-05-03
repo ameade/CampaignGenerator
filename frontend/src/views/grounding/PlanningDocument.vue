@@ -146,8 +146,8 @@ onMounted(() => { loadFromConfig() })
       </div>
 
       <div class="form-section">
-        <PathField v-model="summaries" label="Session summaries file" resolve-base="campaign"
-          help="Optional. Omit to skip the Extract pass (synthesize from dossiers only)." />
+        <PathField v-model="summaries" label="Canonical timeline" resolve-base="campaign"
+          help="The master narrative bible. Optional — omit to skip the Extract pass (synthesize from dossiers only)." />
       </div>
 
       <div class="form-section">
@@ -200,8 +200,8 @@ onMounted(() => { loadFromConfig() })
     <!-- Build dossiers mode -->
     <div v-if="mode === 'dossiers'" class="form-grid">
       <div class="form-section">
-        <PathField v-model="dossierSummaries" label="Session summaries file" required resolve-base="campaign"
-          help="The large summaries.md — per-NPC info is extracted from this." />
+        <PathField v-model="dossierSummaries" label="Canonical timeline" required resolve-base="campaign"
+          help="The master narrative bible — per-NPC info is extracted from this." />
       </div>
 
       <div class="form-section">

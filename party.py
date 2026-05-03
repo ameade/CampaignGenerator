@@ -296,7 +296,7 @@ Rules:
 
 def main() -> None:
     parser = argparse.ArgumentParser(
-        description="Generate a party.md from character sheets, session summaries, and backstories."
+        description="Generate a party.md from character sheets, the canonical timeline, and backstories."
     )
     parser.add_argument("--party-config", metavar="FILE", default=None,
                         help="Party config YAML mapping each PC to sheet/backstory/arc_score. "
@@ -304,7 +304,7 @@ def main() -> None:
     parser.add_argument("--character", "-c", nargs="+", metavar="FILE", default=[],
                         help="Character sheet file(s)")
     parser.add_argument("--summaries", "-s", metavar="FILE",
-                        help="Session summaries file (large, will be chunked)")
+                        help="Canonical timeline — the master narrative bible (large, will be chunked)")
     parser.add_argument("--backstory", "-b", nargs="+", metavar="FILE", default=[],
                         help="Backstory document(s) (optional)")
     parser.add_argument("--arc-scores", "-a", nargs="+", metavar="FILE", default=[],

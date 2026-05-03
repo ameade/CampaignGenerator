@@ -99,10 +99,10 @@ def run_synthesize(client, hits: list[str], query: str, model: str) -> str:
 
 def main() -> None:
     parser = argparse.ArgumentParser(
-        description="Search session summaries for a specific event, NPC, or topic."
+        description="Search the canonical timeline (master narrative bible) for a specific event, NPC, or topic."
     )
     parser.add_argument("input", metavar="SUMMARIES",
-                        help="Session summaries file to search")
+                        help="Canonical timeline (master narrative bible) to search")
     parser.add_argument("query", metavar="QUERY",
                         help="What to look for (question or topic)")
     parser.add_argument("--hits-only", action="store_true",

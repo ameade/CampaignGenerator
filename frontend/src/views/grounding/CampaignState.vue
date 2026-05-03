@@ -65,8 +65,8 @@ onMounted(() => { loadFromConfig() })
 
     <div class="form-grid">
       <div class="form-section">
-        <PathField v-model="input" label="Session summaries file" required resolve-base="campaign"
-          help="The large summaries.md file that gets chunked and extracted." />
+        <PathField v-model="input" label="Canonical timeline" required resolve-base="campaign"
+          help="The master narrative bible (one big chronologically-ordered file). Gets chunked and extracted into per-chunk state notes." />
       </div>
 
       <div class="form-section">

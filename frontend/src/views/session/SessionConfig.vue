@@ -239,9 +239,9 @@ onMounted(() => {
           />
           <PathField
             v-model="summaries"
-            label="Session summaries file"
+            label="Canonical timeline"
             absolute
-            help="The big summaries.md used by grounding tools."
+            help="The master narrative bible (one big file) consumed by all grounding tools."
           />
           <MultiPathField
             v-model="vttContext"

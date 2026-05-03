@@ -488,14 +488,14 @@ def run_synthesize(
 
 def main() -> None:
     parser = argparse.ArgumentParser(
-        description="Generate a planning.md from NPC dossiers, threat arc scores, and session summaries."
+        description="Generate a planning.md from NPC dossiers, threat arc scores, and the canonical timeline."
     )
     parser.add_argument("--npc", "-n", nargs="+", metavar="FILE", default=[],
                         help="NPC dossier file(s)")
     parser.add_argument("--arc-scores", "-a", nargs="+", metavar="FILE", default=[],
                         help="Threat arc score document(s) (e.g. brundar_echo.md, kraken_echoes.md)")
     parser.add_argument("--summaries", "-s", metavar="FILE",
-                        help="Session summaries file (large, will be chunked)")
+                        help="Canonical timeline — the master narrative bible (large, will be chunked)")
     parser.add_argument("--context", "-c", nargs="+", metavar="FILE", default=[],
                         help="Optional world context files (factions, locations, etc.)")
     parser.add_argument("--output", "-o", metavar="FILE",
