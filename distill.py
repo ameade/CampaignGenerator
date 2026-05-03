@@ -87,10 +87,10 @@ Output only the world_state document. No preamble or commentary.
 
 def main() -> None:
     parser = argparse.ArgumentParser(
-        description="Distill session summaries into a world_state lore document."
+        description="Distill the canonical timeline (master narrative bible) into a world_state lore document."
     )
     parser.add_argument("input", nargs="?",
-                        help="Session summaries file (not needed with --synthesize-only)")
+                        help="Canonical timeline — the master narrative bible (not needed with --synthesize-only)")
     parser.add_argument("--output", "-o", required=True, metavar="FILE",
                         help="Where to save the final world_state document")
     parser.add_argument("--chunk-size", type=int, default=60000, metavar="CHARS",

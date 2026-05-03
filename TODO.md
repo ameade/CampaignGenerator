@@ -302,57 +302,44 @@ Pick one of the four candidate fixes documented in
 - `server/config.py:_SAVE_KEY_PREFIXES` — backend prefix filter that decides
   which keys land in `ui_config.yaml`
 
-### [ ] Scene Editor: signal that the review goal is "confirm order is right," not "re-order"
+### [ ] Scene Editor: persist a per-scene "[x] Reviewed — order looks right" flag
 
 **Context**
-The Stage 2 / scene-extraction checkpoint is easy to misread. New users
-(and even experienced ones returning after a break) assume the review
-step requires manually editing or resorting the `## Verbatim moments`
-list before narrating. That assumption inflates the perceived cost of
-the checkpoint and discourages running it.
-
-What's actually true (now documented at
+The dismissable banner now reminds users that the Stage 2 review is a
+**confirm-order** step, not a reorder step (see
 `docs/session_doc_pipeline.md` → "What 'review' means at the Stage 2 /
-scene-extraction checkpoint"):
-
-- VTT moments arrive roughly chronological from Zoom timestamps.
-- Pass 5's prompt explicitly forbids reordering — it's a renderer over
-  the order it's given.
-- A "no edits needed" review is a valid, intended outcome. The goal is
-  to **confirm order**, edit only when something is genuinely wrong
-  (interleaved exchanges, stray lines from another scene, hallucinated
-  quotes, missing GM-recap beats).
+scene-extraction checkpoint", and the peach banner at the top of
+`ExtractionEditor.vue`'s Extraction tab). The remaining piece is a
+durable per-scene approval marker so the user can see at a glance
+which scenes they have already validated.
 
 **What to do**
-Surface this guidance in the Session Doc Editor UI itself, not just in
-the docs. Possible shapes:
+Add a `[ ] Reviewed — order looks right` checkbox per scene that
+toggles green and is persisted — e.g. as a `reviewed: true` line in
+the scene file's YAML frontmatter, or as a sidecar
+`NN_<slug>.reviewed` marker file. Plays the same role as a
+code-review approval: captures the human checkpoint without
+requiring a code edit. Show the reviewed/unreviewed state next to
+each scene in `SceneList.vue` so the workspace tells you what's left
+to look at.
 
-- A short helper banner at the top of the per-scene extraction view
-  that reads something like *"Read through to confirm the moments are
-  in the right order. You only need to edit if something is wrong —
-  the LLM will not re-order."*
-- A `[ ] Reviewed — order looks right` checkbox per scene that toggles
-  green and is persisted (e.g. via a small marker in the scene file
-  frontmatter, or a sidecar `.reviewed` file). Plays the same role as
-  a code-review approval — captures the human checkpoint without
-  requiring a code edit.
-- Bonus: a "diff vs. previous extraction" view for re-runs, so the
-  reviewer can see what changed without re-reading the whole file.
+Bonus: a "diff vs. previous extraction" view for re-runs so the
+reviewer can see what changed without re-reading the whole file.
 
 **Where it lives**
 - `frontend/src/components/scene-editor/ExtractionEditor.vue` —
-  natural home for the banner and checkbox
+  add the checkbox alongside / replacing the dismissable banner
 - `frontend/src/components/scene-editor/SceneList.vue` — show the
   reviewed/unreviewed state next to each scene
-- `server/routers/scene_editor.py` — endpoint for persisting the
-  reviewed flag if we go the sidecar/frontmatter route
+- `server/routers/scene_editor.py` — endpoint for reading/writing
+  the reviewed flag (sidecar file or frontmatter mutation)
 
 **Why this matters**
 The whole pipeline is designed around the global rule "LLM extracts →
-human reviews → LLM renders." If users skip the review because they
-think it implies mandatory editing, the rule degrades to "LLM extracts
-→ LLM renders," which is exactly the failure mode the architecture
-exists to prevent.
+human reviews → LLM renders." A persistent reviewed marker turns the
+implicit "I scrolled through" into an explicit "I approved this
+scene," which is the actual checkpoint signal the rest of the
+pipeline depends on.
 
 ### [ ] scene_extract.py scaffolds keep raw player names instead of mapping to characters / GM
 
@@ -475,71 +462,6 @@ isolated to the latest extract. `--since` turns the synthesis step
 from O(history) into O(new) — same payoff `--build-dossiers` already
 delivers for planning.
 
-### [ ] Default "Split by session prefix" to `# Chapter` (per-campaign config)
-
-**Context**
-The extract→synthesize pipelines (distill, party, planning,
-campaign_state) accept `--split-chapters "# Chapter"` so each session
-becomes one chunk instead of being chopped at character-count
-boundaries. This is the right default for almost every campaign —
-session-aligned chunking respects narrative boundaries the chunk-size
-slicer would cut through. Today the field is left empty by default
-and the user has to remember to type `# Chapter` into "Split by
-session prefix" on every page.
-
-The web UI fields exist already
-(`CampaignState.vue:103-104`, `PartyDocument.vue:192-193`,
-`PlanningDocument.vue:181-182, 236-...`) — they just default to `''`
-and are not pre-filled.
-
-**What to do**
-Make `split_chapters` a per-campaign config value with a default of
-`# Chapter`, applied across all four pages so the user sets it once
-(or relies on the default) and never thinks about it again.
-
-Specifically:
-
-- Add a single `split_chapters` (or `chapter_marker`) key to
-  `ui_config.yaml` at the campaign level, defaulting to `# Chapter`.
-  Surface it as one field on `SessionConfig.vue` so it's set
-  alongside campaign / session directories.
-- On each grounding page, replace the per-page
-  `cs_split_chapters`/`party_split_chapters`/`plan_split_chapters`/
-  `plan_build_split_chapters` lookups with a fallback to the
-  campaign-level key:
-  `splitChapters.value = v.cs_split_chapters || v.split_chapters || '# Chapter'`
-- Have `derive_campaign_paths` (or a new derive helper) populate
-  `split_chapters: '# Chapter'` if the user hasn't overridden it,
-  same way it populates other auto-detected fields.
-
-Open question: do per-page overrides still make sense? Probably yes
-for `--build-dossiers` (which may want chapter granularity even when
-synthesis is doing something else), but the per-page field can be
-collapsed into "Override split prefix" inside the advanced panel
-instead of a top-level field.
-
-**Where it lives**
-- `frontend/src/views/grounding/CampaignState.vue:15, 26, 44, 103-111`
-- `frontend/src/views/grounding/DistillWorldState.vue:13, 23, 35, 84-87`
-  (`splitChapters` ref + advanced field — same pattern)
-- `frontend/src/views/grounding/PartyDocument.vue:24, 39, 82, 192-200`
-- `frontend/src/views/grounding/PlanningDocument.vue:21, 42, 48, 77,
-  89, 181-189, 236-...` (synthesis + build-dossiers)
-- `frontend/src/views/session/SessionConfig.vue` — natural home for
-  the new campaign-level field
-- `server/config.py:derive_campaign_paths` — return
-  `split_chapters: '# Chapter'` as a default
-- `server/routers/grounding.py:49, 86, 126, ...` — already accepts
-  the param; no change unless we want to default it on the server
-
-**Why this matters**
-Splitting on chunk-size boundaries breaks scenes mid-paragraph and
-forces the synthesizer to reason across chunk seams. Splitting on
-`# Chapter` keeps each session intact, which dramatically improves
-extraction quality. It is the correct default; treating it as
-"opt-in advanced flag" buries the right answer behind a friction step
-the user has to redo for every campaign and every page.
-
 ### [ ] Per-step batch-mode toggle for distill / party / planning / campaign_state extractions
 
 **Context**
@@ -611,58 +533,4 @@ which is a fair trade for re-runs the user fires off and walks away
 from. Making it per-step means the user can keep streaming on the
 fast Phase 1 calls when they're iterating, then flip to batch for the
 big "rebuild from all of history" runs.
-
-### [ ] Rename "Session summaries file" → "Canonical timeline" everywhere
-
-**Context**
-The master narrative bible (the big chronological document the
-extract→synthesize pipelines chunk through) is referred to in the UI,
-help text, and CLI as the "Session summaries file" — sometimes
-"summaries", sometimes "session summaries", sometimes "summaries
-file". The naming is inconsistent and easy to confuse with the
-per-session `summaries/<date>/...` directories that hold scene
-extractions, scaffolds, and the assembled gm-assist doc. When the UI
-prompts for "Session summaries file" it's not obvious whether it
-wants the master bible or a per-session summary, and users (including
-me) keep guessing wrong.
-
-The canonical name should be **"canonical timeline"** (or
-"canonical timeline book" in long form) — that's what the document
-actually is: the chronologically-ordered narrative book that all
-extract pipelines treat as the source of truth for prior sessions.
-
-**What to do**
-Rename across the UI, CLI help, and docs. Likely surface area:
-
-- Frontend labels and help text on every grounding page that asks
-  for the master bible:
-  - `frontend/src/views/grounding/CampaignState.vue`
-  - `frontend/src/views/grounding/DistillWorldState.vue`
-  - `frontend/src/views/grounding/PartyDocument.vue`
-  - `frontend/src/views/grounding/PlanningDocument.vue`
-  - `frontend/src/views/prep/QuerySummaries.vue`
-- CLI argparse help in `distill.py`, `party.py`, `planning.py`,
-  `campaign_state.py`, `query.py`, and any other scripts that take
-  `--summaries` (consider whether the flag itself should also be
-  renamed to `--canonical-timeline`, with `--summaries` kept as an
-  alias for back-compat).
-- Doc strings inside `campaignlib.py` for any helper that takes the
-  bible as input.
-- `docs/cli_tools.md`, `docs/session_prep_workflow.md`, and any
-  other doc that says "session summaries file" referring to the
-  master bible.
-
-Do **not** rename:
-
-- The `summaries/<date>/...` per-session directory tree (that one
-  really is a per-session summary, the name is correct there).
-- `vtt_summary.py` and its output (per-session summary doc that
-  later gets folded into the canonical timeline).
-
-**Why this matters**
-The two concepts — *canonical timeline* (one big book) and
-*per-session summary* (many small files) — feed different parts of
-the pipeline and shouldn't share a label. Disambiguating the name in
-the UI is the cheapest way to stop the recurring "wait, which one
-does this field want?" confusion.
 

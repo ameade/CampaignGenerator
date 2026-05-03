@@ -9,7 +9,7 @@ const config = useConfigStore()
 const input = ref('')
 const output = ref('')
 const extractDir = ref('')
-const splitChapters = ref('')
+const splitChapters = ref('# Chapter')
 const noLog = ref(false)
 const showAdvanced = ref(false)
 
@@ -18,7 +18,7 @@ function loadFromConfig() {
   input.value = v.distill_input || v.summaries || ''
   output.value = v.distill_output || v.world_state_output || v.world_state || ''
   extractDir.value = v.distill_extract_dir || ''
-  splitChapters.value = v.distill_split_chapters || ''
+  splitChapters.value = v.distill_split_chapters || '# Chapter'
 }
 
 const ready = computed(() =>
@@ -56,8 +56,8 @@ onMounted(() => { loadFromConfig() })
 
     <div class="form-grid">
       <div class="form-section">
-        <PathField v-model="input" label="Session summaries file" required resolve-base="campaign"
-          help="The large summaries.md file that gets chunked and distilled." />
+        <PathField v-model="input" label="Canonical timeline" required resolve-base="campaign"
+          help="The master narrative bible (one big chronologically-ordered file). Gets chunked and distilled." />
       </div>
 
       <div class="form-section">

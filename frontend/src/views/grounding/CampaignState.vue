@@ -11,7 +11,7 @@ const output = ref('')
 const trackFile = ref('')
 const trackInline = ref('')
 const extractDir = ref('')
-const splitChapters = ref('')
+const splitChapters = ref('# Chapter')
 const noLog = ref(false)
 const showAdvanced = ref(false)
 
@@ -21,7 +21,7 @@ function loadFromConfig() {
   output.value = v.cs_output || v.campaign_state_output || v.campaign_state || ''
   trackFile.value = v.cs_track_file || v.tracking_file || ''
   extractDir.value = v.cs_extract_dir || ''
-  splitChapters.value = v.cs_split_chapters || ''
+  splitChapters.value = v.cs_split_chapters || '# Chapter'
 }
 
 const ready = computed(() =>
@@ -65,8 +65,8 @@ onMounted(() => { loadFromConfig() })
 
     <div class="form-grid">
       <div class="form-section">
-        <PathField v-model="input" label="Session summaries file" required resolve-base="campaign"
-          help="The large summaries.md file that gets chunked and extracted." />
+        <PathField v-model="input" label="Canonical timeline" required resolve-base="campaign"
+          help="The master narrative bible (one big chronologically-ordered file). Gets chunked and extracted into per-chunk state notes." />
       </div>
 
       <div class="form-section">

@@ -20,7 +20,7 @@ const arcScores = ref('')
 const context = ref('')
 const output = ref('')
 const extractDir = ref('')
-const splitChapters = ref('')
+const splitChapters = ref('# Chapter')
 const noLog = ref(false)
 const showAdvanced = ref(false)
 
@@ -34,7 +34,7 @@ function loadFromConfig() {
   context.value = v.party_context || ''
   output.value = v.party_output || v.party || ''
   extractDir.value = v.party_extract_dir || ''
-  splitChapters.value = v.party_split_chapters || ''
+  splitChapters.value = v.party_split_chapters || '# Chapter'
   // Persisted mode wins; otherwise default to 'config' if a YAML path is set,
   // else fall back to 'flat' so legacy workspaces still see the old form.
   if (v.party_mode === 'config' || v.party_mode === 'flat') {
@@ -149,8 +149,8 @@ onMounted(() => { loadFromConfig() })
 
       <!-- Summaries (both modes) -->
       <div class="form-section">
-        <PathField v-model="summaries" label="Session summaries file" resolve-base="campaign"
-          help="Optional. Omit to skip the Extract pass (characters-only mode)." />
+        <PathField v-model="summaries" label="Canonical timeline" resolve-base="campaign"
+          help="The master narrative bible. Optional — omit to skip the Extract pass (characters-only mode)." />
       </div>
 
       <div class="form-section">

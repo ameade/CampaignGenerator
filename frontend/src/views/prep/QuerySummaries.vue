@@ -43,7 +43,8 @@ onMounted(() => { loadFromConfig() })
 
     <div class="form-grid">
       <div class="form-section">
-        <PathField v-model="input" label="Session summaries file" required resolve-base="campaign" />
+        <PathField v-model="input" label="Canonical timeline" required resolve-base="campaign"
+          help="The master narrative bible. Search runs across this file." />
       </div>
 
       <div class="form-section">

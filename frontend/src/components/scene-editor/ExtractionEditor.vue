@@ -1,5 +1,7 @@
 <script setup lang="ts">
-import { ref, computed } from 'vue'
+import { ref, computed, onMounted } from 'vue'
+
+const REVIEW_BANNER_KEY = 'cg_scene_review_banner_dismissed'
 
 const props = defineProps<{
   extractionContent: string
@@ -34,6 +36,22 @@ const emit = defineEmits<{
 
 const activeTab = ref<'extraction' | 'roleplay' | 'enhanced'>('extraction')
 const saveFlash = ref(false)
+const reviewBannerDismissed = ref(false)
+
+onMounted(() => {
+  reviewBannerDismissed.value = localStorage.getItem(REVIEW_BANNER_KEY) === '1'
+})
+
+function dismissReviewBanner() {
+  reviewBannerDismissed.value = true
+  localStorage.setItem(REVIEW_BANNER_KEY, '1')
+}
+
+const showReviewBanner = computed(() =>
+  activeTab.value === 'extraction'
+    && props.hasExtraction
+    && !reviewBannerDismissed.value
+)
 
 // Token estimate
 function estimateTokens(text: string): number {
@@ -118,6 +136,22 @@ function openTypora() {
 
     <!-- Extraction pane -->
     <div class="editor-pane" :class="{ hidden: activeTab !== 'extraction' }">
+      <div v-if="showReviewBanner" class="review-banner">
+        <div class="review-banner-text">
+          <strong>Confirm the order is right.</strong>
+          You only need to edit if something is wrong — the LLM will
+          render in the order it sees and will not reorder events.
+          Edit for: stray lines from another scene, hallucinated quotes,
+          interleaved exchanges that should be tightened, missing GM beats.
+          A "no edits needed" review is a valid outcome.
+        </div>
+        <button
+          type="button"
+          class="review-banner-dismiss"
+          @click="dismissReviewBanner"
+          title="Got it — don't show again"
+        >&times;</button>
+      </div>
       <textarea
         class="editor-ta"
         :value="extractionContent"
@@ -290,4 +324,33 @@ function openTypora() {
   user-select: none;
 }
 .prose-toggle input { cursor: pointer; }
+
+.review-banner {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  padding: 8px 12px;
+  background: rgba(245, 169, 127, 0.08);
+  border-bottom: 1px solid var(--bg-surface0);
+  border-left: 3px solid var(--peach);
+  flex-shrink: 0;
+}
+.review-banner-text {
+  flex: 1;
+  font-size: 11px;
+  line-height: 1.5;
+  color: var(--text-sub);
+}
+.review-banner-text strong { color: var(--text); font-weight: 700; }
+.review-banner-dismiss {
+  background: none;
+  border: none;
+  color: var(--text-muted);
+  cursor: pointer;
+  font-size: 16px;
+  line-height: 1;
+  padding: 0 4px;
+  flex-shrink: 0;
+}
+.review-banner-dismiss:hover { color: var(--text); }
 </style>
