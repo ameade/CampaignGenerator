@@ -146,7 +146,8 @@ async function saveConfig() {
   await apiPut('/api/config/', { values: config.values })
 }
 
-onMounted(() => {
+onMounted(async () => {
+  await config.load()
   loadFromConfig()
 })
 </script>

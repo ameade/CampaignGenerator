@@ -54,6 +54,10 @@ const routes = [
         component: () => import('./views/grounding/DistillWorldState.vue'),
       },
       {
+        path: 'world-state',
+        redirect: '/grounding/distill',
+      },
+      {
         path: 'party',
         name: 'party-document',
         component: () => import('./views/grounding/PartyDocument.vue'),
