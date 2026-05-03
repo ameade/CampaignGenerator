@@ -15,6 +15,7 @@ const sessionDir = ref('')
 const vttInput = ref('')
 const sdSession = ref('')
 const characters = ref('')
+const gmPlayer = ref('')
 const voiceDir = ref('')
 const examplesDir = ref('')
 const vttContext = ref('')
@@ -30,6 +31,7 @@ function loadFromConfig() {
   vttInput.value = v.vtt_input || ''
   sdSession.value = v.sd_session || ''
   characters.value = v.sd_characters || v.session_doc_characters || ''
+  gmPlayer.value = v.sd_gm_player || ''
   voiceDir.value = v.sd_voice_dir || v.session_doc_voice_dir || ''
   examplesDir.value = v.sd_examples_dir || v.session_doc_examples_dir || ''
   vttContext.value = v.vtt_context || ''
@@ -45,6 +47,7 @@ function saveToConfig() {
     vtt_input: vttInput.value,
     sd_session: sdSession.value,
     sd_characters: characters.value,
+    sd_gm_player: gmPlayer.value,
     sd_voice_dir: voiceDir.value,
     sd_examples_dir: examplesDir.value,
     vtt_context: vttContext.value,
@@ -200,6 +203,21 @@ onMounted(() => {
             placeholder='Zalthir, Grygum, Daz, Thorin'
           />
           <div class="field-help">Comma-separated narrator roster</div>
+        </div>
+        <div class="field">
+          <label class="field-label">GM player display name</label>
+          <input
+            type="text"
+            class="field-input"
+            v-model="gmPlayer"
+            placeholder='Kostadis'
+          />
+          <div class="field-help">
+            The name the GM appears under in Zoom captions. Stage 2 (scene extraction) rewrites
+            this player's lines to <code>GM:</code> before the LLM sees the transcript so player
+            names never leak into scaffolds. Player → character mappings come from
+            <code>party.md</code>.
+          </div>
         </div>
       </div>
 

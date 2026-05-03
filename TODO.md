@@ -328,30 +328,6 @@ status across a re-run that changed content.
 - Stage-2 runner — write the previous extraction to its sidecar
   before overwriting
 
-### [ ] Wire `--party` / `--gm-player` into the web UI scene-extraction run
-
-**Context**
-`scene_extract.py` now accepts `--party FILE` and `--gm-player NAME`
-to deterministically rewrite Zoom display names → character / GM
-labels before the LLM sees the transcript (closes the
-who-said-what attribution gap from the original TODO). The CLI side
-is done; the web UI's Stage 2 button does not yet pass these flags
-through, so users running scene extraction from the browser still
-get raw player names in scaffolds.
-
-**What to do**
-- Pass `--party <party_config_path>` and `--gm-player <gm_player>`
-  from `server/routers/scene_editor.py:_build_extract_cmd`. Pull the
-  party path from `CONFIG['party_config_path']` (already saved by
-  the Party Document page) and add a `gm_player` config key.
-- Surface a single `gm_player` text field on `SessionConfig.vue` so
-  the user types their Zoom display name once per campaign. Persist
-  via the existing `apiPut('/api/config/')` flow.
-- When `--party` resolves to a `party.yaml` file rather than a
-  `party.md`, the loader currently expects party.md syntax. Either
-  derive `party.md` from `party.yaml` first, or extend
-  `extract_player_character_map` to read both.
-
 ### [ ] Generalize `--since` (per-chunk re-extract) to all extract→synthesize pipelines
 
 **Context**
