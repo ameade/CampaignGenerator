@@ -540,6 +540,73 @@ def load_alias_map(dossier_dir) -> dict[str, list[str]]:
     return result
 
 
+def extract_player_character_map(party_text: str) -> dict[str, str]:
+    """Parse party.md and return {player_name: character_name}.
+
+    Reads ``## <Character>`` headings followed by a
+    ``**<Class>, Player: <Player>**`` info line. When the Player slot
+    holds multiple names separated by ``/`` or ``,`` (e.g. a shared PC
+    or alt), both names map to the same character.
+
+    Mirrors the parsing pattern of ``session_doc.extract_character_roster``
+    so the two stay in lockstep — they read the same party.md shape but
+    produce different outputs (one a roster string, one a reverse map).
+    """
+    result: dict[str, str] = {}
+    current_name: str | None = None
+    for line in party_text.splitlines():
+        m = re.match(r'^## (.+)$', line.strip())
+        if m:
+            current_name = m.group(1).strip()
+            continue
+        if current_name:
+            cm = re.match(r'^\*\*(.+\d+.+)\*\*$', line.strip())
+            if cm:
+                pm = re.search(r',\s*Player:\s*(.+)', cm.group(1))
+                if pm:
+                    raw = pm.group(1).strip().rstrip('*')
+                    for p in re.split(r'[/,]', raw):
+                        p = p.strip()
+                        if p:
+                            result[p] = current_name
+                current_name = None
+    return result
+
+
+def normalize_vtt_speakers(
+    vtt_text: str,
+    player_map: dict[str, str] | None = None,
+    gm_player: str | None = None,
+) -> str:
+    """Rewrite speaker labels at the start of VTT lines.
+
+    Maps each ``Player Name:`` prefix to the corresponding character
+    name from ``player_map``. ``gm_player`` (if given) is rewritten to
+    ``GM`` regardless of any party.md entry. Longer names match first
+    so a player named ``Mike`` and a player named ``Mike Hall`` are
+    both handled correctly.
+
+    Body text is untouched — only labels at the start of a dialogue
+    line are rewritten. This is a deterministic preprocessing step the
+    LLM never sees and never has to derive itself.
+    """
+    if not player_map and not gm_player:
+        return vtt_text
+    full_map = dict(player_map or {})
+    if gm_player:
+        full_map[gm_player] = "GM"
+    sorted_keys = sorted(full_map.keys(), key=len, reverse=True)
+    out_lines: list[str] = []
+    for line in vtt_text.splitlines():
+        for key in sorted_keys:
+            prefix = f"{key}:"
+            if line.startswith(prefix):
+                line = f"{full_map[key]}:" + line[len(prefix):]
+                break
+        out_lines.append(line)
+    return "\n".join(out_lines)
+
+
 def format_npc_roster(alias_map: dict[str, list[str]]) -> str:
     """Render an alias map as a 'Known NPCs' block to append to an extract prompt.
 
