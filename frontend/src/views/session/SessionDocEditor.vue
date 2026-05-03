@@ -342,7 +342,11 @@ async function runExtract() {
     ? 'Submitting Stage 2 batch (Message Batches API)...'
     : 'Re-extracting quotes (Stage 2)...')
 
-  const url = useBatch.value ? '/api/editor/extract?batch=1' : '/api/editor/extract'
+  // force=1 — clicking Re-Extract always means "do the work" (overwrite
+  // existing files; backend snapshots prior content to .prev for diff view).
+  const url = useBatch.value
+    ? '/api/editor/extract?batch=1&force=1'
+    : '/api/editor/extract?force=1'
   activeSSE.value = connectSSE(url, {
     onData(text) {
       narrationOutput.value += text
@@ -734,6 +738,7 @@ onMounted(async () => {
             :estimated-tokens="estimatedTokens"
             :default-narrate-tokens="narrateTokens"
             :has-extraction="hasExtraction"
+            :current-scene="currentScene"
             :is-roleplay-local="isRoleplayLocal"
             :narrating="narrating"
             :extracting="extracting"

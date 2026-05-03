@@ -151,6 +151,91 @@ def test_run_scene_extraction_resumes_existing_files(tmp_path):
     assert (tmp_path / "01_scene_a.md").read_text(encoding="utf-8") == "ALREADY DONE"
 
 
+def test_run_scene_extraction_force_overwrites_and_snapshots_prev(tmp_path):
+    """force=True: existing files are re-extracted; prior content is moved to
+    <file>.prev when the new content differs; .reviewed sidecar is cleared."""
+    scenes = [{"name": "Scene A", "body": "- a"}]
+    (tmp_path / "01_scene_a.md").write_text(
+        "OLD CONTENT — to be snapshotted", encoding="utf-8",
+    )
+    (tmp_path / "01_scene_a.md.reviewed").write_text("", encoding="utf-8")
+
+    def fake_stream(client, system, user, model, max_tokens=8096, silent=False,
+                    verbose=False, cache_system=False):
+        return "FRESH MOMENTS"
+
+    with patch.object(campaignlib, "stream_api", side_effect=fake_stream):
+        campaignlib.run_scene_extraction(
+            client=None, vtt_text="VTT", scenes=scenes,
+            extract_dir=tmp_path, model="m",
+            extraction_instruction="{name} {body}",
+            force=True,
+        )
+
+    assert (tmp_path / "01_scene_a.md.prev").read_text(encoding="utf-8") == \
+        "OLD CONTENT — to be snapshotted"
+    assert "FRESH MOMENTS" in (tmp_path / "01_scene_a.md").read_text(encoding="utf-8")
+    # .reviewed cleared since content changed
+    assert not (tmp_path / "01_scene_a.md.reviewed").exists()
+
+
+def test_run_scene_extraction_force_skips_overwrite_when_identical(tmp_path):
+    """force=True: if the LLM returns byte-identical output, don't bump .prev
+    or clear .reviewed — there's nothing to diff against."""
+    scenes = [{"name": "Scene A", "body": "- a"}]
+    # Write a file that exactly matches what format_scene_output will produce.
+    expected = campaignlib.format_scene_output("Scene A", "- a", "MOMENTS")
+    (tmp_path / "01_scene_a.md").write_text(expected, encoding="utf-8")
+    (tmp_path / "01_scene_a.md.reviewed").write_text("", encoding="utf-8")
+
+    def fake_stream(client, system, user, model, max_tokens=8096, silent=False,
+                    verbose=False, cache_system=False):
+        return "MOMENTS"
+
+    with patch.object(campaignlib, "stream_api", side_effect=fake_stream):
+        campaignlib.run_scene_extraction(
+            client=None, vtt_text="VTT", scenes=scenes,
+            extract_dir=tmp_path, model="m",
+            extraction_instruction="{name} {body}",
+            force=True,
+        )
+
+    assert not (tmp_path / "01_scene_a.md.prev").exists()
+    assert (tmp_path / "01_scene_a.md.reviewed").exists()
+
+
+def test_run_scene_extraction_default_still_skips_existing(tmp_path):
+    """force=False (the default) preserves the resume-after-crash behavior:
+    no API call, no .prev, file untouched."""
+    scenes = [{"name": "Scene A", "body": "- a"}]
+    (tmp_path / "01_scene_a.md").write_text("STAYS", encoding="utf-8")
+
+    calls = []
+
+    def fake_stream(client, system, user, model, max_tokens=8096, silent=False,
+                    verbose=False, cache_system=False):
+        calls.append(user)
+        return "fresh"
+
+    with patch.object(campaignlib, "stream_api", side_effect=fake_stream):
+        campaignlib.run_scene_extraction(
+            client=None, vtt_text="VTT", scenes=scenes,
+            extract_dir=tmp_path, model="m",
+            extraction_instruction="{name} {body}",
+        )
+
+    assert calls == []
+    assert (tmp_path / "01_scene_a.md").read_text(encoding="utf-8") == "STAYS"
+    assert not (tmp_path / "01_scene_a.md.prev").exists()
+
+
+def test_snapshot_scene_for_rerun_no_existing_file(tmp_path):
+    """No existing file → caller should write; nothing to snapshot."""
+    out = tmp_path / "01_x.md"
+    assert campaignlib.snapshot_scene_for_rerun(out, "new") is True
+    assert not (tmp_path / "01_x.md.prev").exists()
+
+
 def test_run_scene_extraction_empty_scenes_exits(tmp_path):
     with pytest.raises(SystemExit):
         campaignlib.run_scene_extraction(

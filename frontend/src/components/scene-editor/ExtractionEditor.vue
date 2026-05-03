@@ -1,5 +1,6 @@
 <script setup lang="ts">
-import { ref, computed, onMounted } from 'vue'
+import { ref, computed, onMounted, watch } from 'vue'
+import { apiFetch } from '../../api/client'
 
 const REVIEW_BANNER_KEY = 'cg_scene_review_banner_dismissed'
 
@@ -19,6 +20,7 @@ const props = defineProps<{
   reflections: boolean
   useEnhancedSections: boolean
   reviewed: boolean
+  currentScene: number | null
 }>()
 
 const emit = defineEmits<{
@@ -94,6 +96,82 @@ function openTypora() {
   const type = activeTab.value === 'roleplay' ? 'roleplay' : 'extraction'
   emit('open-typora', type)
 }
+
+// ── Diff vs. last run ───────────────────────────────────────────────────
+// Lazy-loaded via /api/editor/extraction/{n}/prev. .prev is created by
+// scene_extract.py --force when a re-run produces content that differs
+// from what's already on disk.
+
+type DiffLine = { kind: 'eq' | 'add' | 'del'; text: string }
+
+const diffMode = ref(false)
+const diffStatus = ref<'idle' | 'loading' | 'none' | 'ready'>('idle')
+const diffLines = ref<DiffLine[]>([])
+
+// Reset diff state whenever the user moves to another scene.
+watch(() => props.currentScene, () => {
+  diffMode.value = false
+  diffStatus.value = 'idle'
+  diffLines.value = []
+})
+
+function lineDiff(prev: string, curr: string): DiffLine[] {
+  const a = prev.split('\n')
+  const b = curr.split('\n')
+  const m = a.length
+  const n = b.length
+  // LCS table — O(m*n) memory; fine for scene-extraction sizes (<2k lines).
+  const dp: number[][] = Array.from({ length: m + 1 }, () => new Array(n + 1).fill(0))
+  for (let i = m - 1; i >= 0; i--) {
+    for (let j = n - 1; j >= 0; j--) {
+      dp[i][j] = a[i] === b[j] ? dp[i + 1][j + 1] + 1 : Math.max(dp[i + 1][j], dp[i][j + 1])
+    }
+  }
+  const out: DiffLine[] = []
+  let i = 0
+  let j = 0
+  while (i < m && j < n) {
+    if (a[i] === b[j]) {
+      out.push({ kind: 'eq', text: a[i] })
+      i++
+      j++
+    } else if (dp[i + 1][j] >= dp[i][j + 1]) {
+      out.push({ kind: 'del', text: a[i] })
+      i++
+    } else {
+      out.push({ kind: 'add', text: b[j] })
+      j++
+    }
+  }
+  while (i < m) { out.push({ kind: 'del', text: a[i] }); i++ }
+  while (j < n) { out.push({ kind: 'add', text: b[j] }); j++ }
+  return out
+}
+
+async function toggleDiff() {
+  if (diffMode.value) {
+    diffMode.value = false
+    return
+  }
+  if (!props.currentScene) return
+  diffMode.value = true
+  diffStatus.value = 'loading'
+  try {
+    const data = await apiFetch<{ exists: boolean; content: string; current?: string }>(
+      `/api/editor/extraction/${props.currentScene}/prev`
+    )
+    if (!data.exists) {
+      diffStatus.value = 'none'
+      diffLines.value = []
+      return
+    }
+    diffLines.value = lineDiff(data.content, data.current ?? props.extractionContent)
+    diffStatus.value = 'ready'
+  } catch {
+    diffStatus.value = 'none'
+    diffLines.value = []
+  }
+}
 </script>
 
 <template>
@@ -155,6 +233,7 @@ function openTypora() {
         >&times;</button>
       </div>
       <textarea
+        v-if="!diffMode"
         class="editor-ta"
         :value="extractionContent"
         @input="emit('update:extractionContent', ($event.target as HTMLTextAreaElement).value)"
@@ -162,6 +241,25 @@ function openTypora() {
         placeholder="Select a scene from the list to begin editing."
         spellcheck="false"
       />
+      <div v-else class="diff-pane">
+        <div v-if="diffStatus === 'loading'" class="diff-info">Loading prior version&hellip;</div>
+        <div v-else-if="diffStatus === 'none'" class="diff-info">
+          No prior version recorded for this scene. A <code>.prev</code> file
+          is written only when a re-run with <em>force</em> produces content
+          that differs from what's already on disk.
+        </div>
+        <div v-else class="diff-body">
+          <div
+            v-for="(line, idx) in diffLines"
+            :key="idx"
+            class="diff-line"
+            :class="'diff-' + line.kind"
+          >
+            <span class="diff-marker">{{ line.kind === 'add' ? '+' : line.kind === 'del' ? '-' : ' ' }}</span>
+            <span class="diff-text">{{ line.text }}</span>
+          </div>
+        </div>
+      </div>
     </div>
 
     <!-- Roleplay pane -->
@@ -191,6 +289,13 @@ function openTypora() {
       <button class="btn-primary" :disabled="!hasExtraction || activeTab === 'enhanced'" @click="save">Save</button>
       <button class="btn-neutral" :disabled="!hasExtraction || activeTab === 'enhanced'" @click="openTypora">Edit in Typora</button>
       <button class="btn-neutral" :disabled="!hasExtraction" @click="emit('reload')">Reload</button>
+      <button
+        class="btn-neutral"
+        :disabled="!hasExtraction || activeTab !== 'extraction' || !currentScene"
+        :class="{ active: diffMode }"
+        @click="toggleDiff"
+        title="Diff this scene's extraction against the prior version (.prev) saved on the last force re-run"
+      >{{ diffMode ? 'Hide diff' : 'Diff vs. last run' }}</button>
       <button
         class="btn-success"
         :disabled="!hasExtraction || narrating || extracting"
@@ -364,4 +469,44 @@ function openTypora() {
   flex-shrink: 0;
 }
 .review-banner-dismiss:hover { color: var(--text); }
+
+.diff-pane {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  background: var(--bg-base);
+}
+.diff-info {
+  padding: 14px;
+  font-size: 12px;
+  color: var(--text-muted);
+  line-height: 1.5;
+}
+.diff-info code { background: var(--bg-mantle); padding: 1px 4px; border-radius: 3px; }
+.diff-body {
+  flex: 1;
+  overflow: auto;
+  padding: 8px 0;
+  font-family: var(--mono);
+  font-size: 12px;
+  line-height: 1.5;
+}
+.diff-line {
+  display: flex;
+  padding: 0 12px;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+.diff-line.diff-eq { color: var(--text-sub); }
+.diff-line.diff-add { background: rgba(166, 209, 137, 0.10); color: #a6d189; }
+.diff-line.diff-del { background: rgba(231, 130, 132, 0.10); color: #e78284; }
+.diff-marker {
+  width: 16px;
+  flex-shrink: 0;
+  user-select: none;
+  opacity: 0.7;
+}
+.diff-text { flex: 1; }
+.btn-neutral.active { background: var(--mauve); color: var(--bg-base); }
 </style>

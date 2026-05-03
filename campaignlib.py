@@ -270,6 +270,28 @@ def _slugify(s: str) -> str:
     return re.sub(r"[^a-z0-9]+", "_", s.lower()).strip("_")
 
 
+def snapshot_scene_for_rerun(out_file: "Path", new_text: str) -> bool:
+    """Decide whether a re-extraction's `new_text` should overwrite `out_file`.
+
+    Returns True if the caller should write `new_text` (content differs or no
+    file existed), False if the existing file is byte-identical (no write
+    needed). When content differs, the existing file is snapshotted to
+    `<out_file>.prev` and any `<out_file>.reviewed` marker is removed —
+    a re-run that changed content invalidates the GM's prior approval.
+    """
+    if not out_file.exists():
+        return True
+    old_text = out_file.read_text(encoding="utf-8")
+    if old_text == new_text:
+        return False
+    prev = out_file.with_name(out_file.name + ".prev")
+    prev.write_text(old_text, encoding="utf-8")
+    reviewed = out_file.with_name(out_file.name + ".reviewed")
+    if reviewed.exists():
+        reviewed.unlink()
+    return True
+
+
 def run_scene_extraction(
     client,
     *,
@@ -284,6 +306,7 @@ def run_scene_extraction(
     cache_vtt: bool = True,
     filename_template: str = "{i:02d}_{slug}.md",
     max_tokens: int = 8192,
+    force: bool = False,
 ) -> list[Path]:
     """For each scene in `scenes`, run a scene-anchored extraction over `vtt_text`.
 
@@ -292,7 +315,10 @@ def run_scene_extraction(
     gm-assist plus `extraction_instruction`. Output is one markdown file per
     scene under `extract_dir`, named `NN_<slug>.md` by default.
 
-    Existing files are skipped so a partial run can be resumed.
+    Existing files are skipped so a partial run can be resumed. Pass
+    `force=True` to re-extract every scene; in that mode the prior file is
+    snapshotted to `<file>.prev` (only if content differs) and any
+    `<file>.reviewed` marker is cleared.
 
     extraction_instruction — the per-call task description. Receives `{name}`
                               and `{body}` substitutions and is rendered as the
@@ -331,21 +357,26 @@ def run_scene_extraction(
         body = scene.get("body", "").strip()
         slug = _slugify(name) or f"scene_{i}"
         out_file = extract_dir / filename_template.format(i=i, slug=slug)
-        if out_file.exists():
+        if out_file.exists() and not force:
             print(f"  [{i}/{total}] Skipping (already exists): {out_file.name}")
             saved.append(out_file)
             continue
 
         user_prompt = extraction_instruction.format(name=name, body=body)
-        print(f"  [{i}/{total}] Scene-extracting: {name}")
+        action = "Re-extracting" if force and out_file.exists() else "Scene-extracting"
+        print(f"  [{i}/{total}] {action}: {name}")
         print("  " + "─" * 56)
         result = stream_api(client, system_prompt, user_prompt, model,
                             max_tokens=max_tokens, cache_system=cache_vtt)
         print("  " + "─" * 56)
 
-        out_file.write_text(format_scene_output(name, body, result), encoding="utf-8")
+        new_text = format_scene_output(name, body, result)
+        if snapshot_scene_for_rerun(out_file, new_text):
+            out_file.write_text(new_text, encoding="utf-8")
+            print(f"  Saved: {out_file.name}\n")
+        else:
+            print(f"  Unchanged (no overwrite): {out_file.name}\n")
         saved.append(out_file)
-        print(f"  Saved: {out_file.name}\n")
 
     return saved
 

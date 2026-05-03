@@ -340,11 +340,17 @@ def _build_enhance_cmd(batch: bool = False) -> list[str] | tuple[None, str]:
     return cmd
 
 
-def _build_reextract_cmd(batch: bool = False) -> list[str] | tuple[None, str]:
+def _build_reextract_cmd(batch: bool = False,
+                         force: bool = False) -> list[str] | tuple[None, str]:
     """Stage 2: scene_extract.py {vtt} --summary {summary} --output-dir {sx_dir}.
 
     Pass `batch=True` to forward `--batch` so per-scene calls are submitted
     as one Message Batch (50% off + cache hits compound).
+
+    Pass `force=True` to forward `--force` so existing per-scene files are
+    overwritten (with .prev snapshot) instead of skipped. The UI sets this
+    when the user clicks the Re-Extract button — clicking it should mean
+    "do the work."
     """
     vtt = _vtt_path()
     if vtt is None or not vtt.exists():
@@ -382,6 +388,8 @@ def _build_reextract_cmd(batch: bool = False) -> list[str] | tuple[None, str]:
         cmd += ["--gm-player", gm_player]
     if batch:
         cmd.append("--batch")
+    if force:
+        cmd.append("--force")
     return cmd
 
 
@@ -540,6 +548,38 @@ async def api_save_extraction(n: int, request: Request):
     return {"ok": True}
 
 
+@router.get("/extraction/{n}/prev")
+def api_get_prev_extraction(n: int):
+    """Return the snapshotted prior extraction (`NN_<slug>.md.prev`), if any.
+
+    Written by `scene_extract.py --force` when a re-run produces content
+    that differs from what's already on disk. The frontend uses this to
+    render a diff against the current extraction so the GM can see what
+    changed across re-runs.
+
+    The .prev always pairs with the raw `NN_<slug>.md` Stage-2 output
+    (never the user-edited `NN_<slug>.scaffold.md`) — the diff view shows
+    what the LLM changed across runs, not what the GM edited locally.
+    """
+    sx = _scene_extractions_dir()
+    if sx is None:
+        return JSONResponse({"exists": False, "content": ""}, status_code=404)
+    scenes = _load_scenes()
+    if n < 1 or n > len(scenes):
+        return JSONResponse({"exists": False, "content": ""}, status_code=404)
+    s = scenes[n - 1]
+    slug = _slugify(s.get("scene", "")) or f"scene_{n}"
+    raw = sx / f"{n:02d}_{slug}.md"
+    prev = raw.with_name(raw.name + ".prev")
+    if not prev.exists():
+        return {"exists": False, "content": ""}
+    return {
+        "exists": True,
+        "content": prev.read_text(encoding="utf-8"),
+        "current": raw.read_text(encoding="utf-8") if raw.exists() else "",
+    }
+
+
 @router.get("/reviewed/{n}")
 def api_get_reviewed(n: int):
     """True iff the GM has marked scene n's extraction as order-reviewed."""
@@ -651,15 +691,17 @@ async def api_enhance(batch: int = 0):
 
 
 @router.get("/extract")
-async def api_extract(batch: int = 0):
+async def api_extract(batch: int = 0, force: int = 0):
     """Stage 2 (Re-Extract Quotes) — calls scene_extract.py.
 
-    `batch=1` forwards `--batch` to the script. Falls back to the old
-    Pass-1-to-4 command (no batch support) when the workspace is on the
-    legacy flow.
+    `batch=1` forwards `--batch` to the script. `force=1` forwards `--force`
+    so existing per-scene files are overwritten (with .prev snapshot) — the
+    UI Re-Extract button always sets this. Falls back to the old
+    Pass-1-to-4 command (no batch / no force support) when the workspace
+    is on the legacy flow.
     """
     if _using_new_flow() or _session_summary_path() and _session_summary_path().exists():
-        result = _build_reextract_cmd(batch=bool(batch))
+        result = _build_reextract_cmd(batch=bool(batch), force=bool(force))
         if isinstance(result, tuple):
             _, err = result
             return JSONResponse({"ok": False, "error": err}, status_code=400)
