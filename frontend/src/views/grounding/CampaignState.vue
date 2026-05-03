@@ -11,7 +11,7 @@ const output = ref('')
 const trackFile = ref('')
 const trackInline = ref('')
 const extractDir = ref('')
-const splitChapters = ref('')
+const splitChapters = ref('# Chapter')
 const noLog = ref(false)
 const showAdvanced = ref(false)
 
@@ -21,7 +21,7 @@ function loadFromConfig() {
   output.value = v.cs_output || v.campaign_state_output || v.campaign_state || ''
   trackFile.value = v.cs_track_file || v.tracking_file || ''
   extractDir.value = v.cs_extract_dir || ''
-  splitChapters.value = v.cs_split_chapters || ''
+  splitChapters.value = v.cs_split_chapters || '# Chapter'
 }
 
 const ready = computed(() =>
