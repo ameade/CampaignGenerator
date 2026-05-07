@@ -69,9 +69,12 @@ function loadConfigFields() {
 }
 
 async function persistBatchToggle() {
+  // Mirror into the legacy overlay so other views on the flat shape see
+  // the new value immediately, then persist via the typed section so it
+  // survives a restart.
   config.values.sd_batch = useBatch.value
   try {
-    await config.save()
+    await config.updateSection('session_doc', { batch: useBatch.value })
   } catch {
     /* non-fatal: toggle will still apply to in-flight calls */
   }

@@ -19,23 +19,74 @@ import subprocess
 import sys
 from pathlib import Path
 
-from fastapi import APIRouter, Request
+from fastapi import APIRouter, Depends, Request
 from fastapi.responses import JSONResponse, StreamingResponse
 
 from server.subprocess_runner import python_exe, stream_subprocess
 
-router = APIRouter()
-
 # ── Module-level state ──────────────────────────────────────────────────────
-# Populated by init_editor_config() at startup
+# CONFIG is a derived view of the unified config service's resolved
+# session_doc state, refreshed before every editor request via the
+# _refresh_config_from_service router dependency. When the service is
+# unavailable (legacy boot path with no config.yaml), CONFIG holds whatever
+# init_editor_config() seeded at startup. Other modules (ledger.py) still
+# import CONFIG directly; the refresh dependency keeps it in sync.
 
 CONFIG: dict = {}
 SCRIPT_DIR = Path(__file__).resolve().parent.parent.parent  # CampaignGenerator/
 
+# Typed-field name → legacy CONFIG-dict-key. Used by _refresh and PUT to keep
+# the two namespaces in sync. Anything not listed maps 1:1.
+_TYPED_TO_CONFIG_KEY: dict[str, str] = {
+    "roleplay_dir": "roleplay_extract_dir",
+    "summary_dir": "summary_extract_dir",
+    "examples_dir": "examples",
+}
+_CONFIG_TO_TYPED_KEY: dict[str, str] = {v: k for k, v in _TYPED_TO_CONFIG_KEY.items()}
+
+
+def _refresh_config_from_service(request: Request) -> None:
+    """Sync CONFIG from the unified service before each request.
+
+    The service is the single source of truth; CONFIG is a back-compat
+    materialization so the existing helpers (and ledger.py) keep reading
+    from a flat dict. No-op when the service isn't wired (legacy boot).
+    """
+    service = getattr(request.app.state, "config_service", None)
+    if service is None:
+        return
+    resolved = service.resolved()
+    sd = resolved["ui"]["session_doc"]
+    for typed_key, value in sd.items():
+        if value is None:
+            continue
+        config_key = _TYPED_TO_CONFIG_KEY.get(typed_key, typed_key)
+        CONFIG[config_key] = value
+    if "work_dir" not in CONFIG:
+        CONFIG["work_dir"] = str(service.campaign_dir)
+
+
+router = APIRouter(dependencies=[Depends(_refresh_config_from_service)])
+
 
 def init_editor_config(config: dict) -> None:
-    """Set the editor CONFIG from main.py startup."""
+    """Seed CONFIG from main.py startup.
+
+    When the unified service is wired, ``_refresh_config_from_service``
+    overlays the resolved view on top of this seed before every request.
+    When it isn't (no config.yaml in the campaign), this remains the only
+    path that populates CONFIG — same behaviour as before the refactor.
+    """
     CONFIG.update(config)
+
+
+def _config_to_typed_payload(payload: dict) -> dict:
+    """Translate a CONFIG-shaped PUT body into typed ui.session_doc keys."""
+    out: dict = {}
+    for k, v in payload.items():
+        typed_key = _CONFIG_TO_TYPED_KEY.get(k, k)
+        out[typed_key] = v
+    return out
 
 
 @router.get("/config")
@@ -46,9 +97,24 @@ def api_get_config():
 
 @router.put("/config")
 async def api_put_config(request: Request):
-    """Update the editor CONFIG at runtime (from the frontend)."""
+    """Update the editor CONFIG at runtime (from the frontend).
+
+    Writes flow through the unified service when available so the typed
+    ``ui.session_doc`` section stays canonical and survives restarts.
+    The local CONFIG dict is still updated so module-level helpers see
+    the change immediately within this request lifetime.
+    """
     data = await request.json()
     CONFIG.update(data)
+    service = getattr(request.app.state, "config_service", None)
+    if service is not None:
+        try:
+            service.update_section("session_doc", _config_to_typed_payload(data))
+        except Exception as exc:
+            return JSONResponse(
+                {"ok": False, "error": str(exc)},
+                status_code=400,
+            )
     return {"ok": True}
 
 
@@ -377,13 +443,11 @@ def _build_reextract_cmd(batch: bool = False,
     # Player: <Player>**` lines.
     if CONFIG.get("party"):
         cmd += ["--party", CONFIG["party"]]
-    # `sd_gm_player` lives in ui_config.yaml (set by SessionConfig.vue).
-    # Read at request time — CONFIG is frozen at server startup, but the
-    # GM player name is a per-campaign field the user may set after
-    # launching the server.
-    from server.config import load_ui_config
-    ui_cfg = load_ui_config()
-    gm_player = (ui_cfg.get("sd_gm_player") or "").strip()
+    # GM player name lives in ui.session_doc.gm_player (typed). The
+    # _refresh_config_from_service router dependency syncs CONFIG before
+    # this handler runs, so reading from CONFIG always sees the
+    # service-resolved value — no separate ui_config.yaml load needed.
+    gm_player = (CONFIG.get("gm_player") or "").strip()
     if gm_player:
         cmd += ["--gm-player", gm_player]
     if batch:

@@ -6,10 +6,14 @@ import sys
 from collections.abc import AsyncGenerator
 from pathlib import Path
 
-from fastapi import APIRouter, Request
+from fastapi import APIRouter, Depends, Request
 from fastapi.responses import JSONResponse, StreamingResponse
 
-router = APIRouter()
+# Share the editor's CONFIG-refresh dependency so ledger routes also see
+# fresh service-resolved values before reading CONFIG.
+from server.routers.scene_editor import _refresh_config_from_service
+
+router = APIRouter(dependencies=[Depends(_refresh_config_from_service)])
 
 SCRIPT_DIR = Path(__file__).resolve().parent.parent.parent
 sys.path.insert(0, str(SCRIPT_DIR))
@@ -21,7 +25,8 @@ _LEDGER: QuoteLedger | None = None
 
 
 def _config() -> dict:
-    """Return the editor CONFIG — single source of truth for paths."""
+    """Return the editor CONFIG — kept in sync with the unified service
+    by ``_refresh_config_from_service`` (router dependency)."""
     from server.routers.scene_editor import CONFIG
     return CONFIG
 
@@ -207,17 +212,50 @@ async def api_auto_assign():
 import re as _re
 
 
-def _normalize_speaker(raw: str) -> str:
-    """Strip parenthetical player names; normalize GM/DM variants.
+def _player_character_map() -> dict[str, str]:
+    """Load party.md and return {player_name: character_name}.
 
-    Examples:
+    Returns an empty dict if party.md is unset or unreadable. Cheap
+    enough to call per scaffolding request — party.md is small and
+    scaffolding isn't hot-path.
+    """
+    cfg = _config()
+    party_path = cfg.get("party")
+    if not party_path:
+        return {}
+    p = Path(party_path)
+    if not p.exists():
+        return {}
+    try:
+        from campaignlib import extract_player_character_map
+        return extract_player_character_map(p.read_text(encoding="utf-8"))
+    except Exception:
+        return {}
+
+
+def _normalize_speaker(raw: str, player_map: dict[str, str] | None = None) -> str:
+    """Strip surrounding brackets and parenthetical player names;
+    normalize GM/DM variants; map bare player names to character names.
+
+    Stage-2 speakers come in shaped like ``[Ben Pfaff]`` or ``[GM]``
+    (the brackets are emitted by scene_extract.py), so they must be
+    peeled off before any equality checks fire.
+
+    Examples (with player_map={"Joe Beda": "Thorin", "Gabe": "Zalthir"}):
+      "[Ben Pfaff]"    → "Grygum"   (via player_map)
+      "[GM]"           → "GM"
       "Thorin (Joe)"   → "Thorin"
       "GM (Gabe)"      → "GM"
       "DM"             → "GM"
+      "Joe Beda"       → "Thorin"
+      "Gabe"           → "Zalthir"
     """
     name = _re.sub(r'\s*\([^)]+\)', '', raw).strip()
+    name = name.strip("[]").strip()
     if name.upper() in ("GM", "DM"):
-        name = "GM"
+        return "GM"
+    if player_map and name in player_map:
+        return player_map[name]
     return name
 
 
@@ -331,6 +369,7 @@ async def _stream_generate_extraction(scene_num: int) -> AsyncGenerator[str, Non
     narrator = scene["narrator"]
     scene_name = scene.get("scene", "")
     focus = scene.get("focus", "")
+    player_map = _player_character_map()
 
     # ── New flow: read beats + quotes from the Stage-2 file ────────────────
     stage2_path = _stage2_path_for(scene_num, scene_name)
@@ -381,12 +420,13 @@ async def _stream_generate_extraction(scene_num: int) -> AsyncGenerator[str, Non
         prev_group: str | None = None
         prev_key: tuple[str, str] | None = None
         for group, speaker, ctx, text in parsed_quotes:
-            speaker_norm = _normalize_speaker(speaker)
-            if group != prev_group:
+            speaker_norm = _normalize_speaker(speaker, player_map)
+            group_norm = _normalize_speaker(group, player_map) if group else group
+            if group_norm != prev_group:
                 if prev_group is not None:
                     lines.append("")
-                if group:
-                    lines.append(f"### [{group}]")
+                if group_norm:
+                    lines.append(f"### [{group_norm}]")
                     lines.append("")
                 prev_key = None
             key = (speaker_norm, ctx)
@@ -397,7 +437,7 @@ async def _stream_generate_extraction(scene_num: int) -> AsyncGenerator[str, Non
                     lines.append(f"<!-- {ctx} -->")
             lines.append(f'{speaker_norm}: "{text}"')
             prev_key = key
-            prev_group = group
+            prev_group = group_norm
         lines.append("")
 
         content = "\n".join(lines)
@@ -481,7 +521,7 @@ async def _stream_generate_extraction(scene_num: int) -> AsyncGenerator[str, Non
     prev_key: tuple[str, str] | None = None
     for q in quotes:
         raw_speaker = q.get("character") or q.get("speaker") or "Unknown"
-        speaker = _normalize_speaker(raw_speaker)
+        speaker = _normalize_speaker(raw_speaker, player_map)
         text = q["quote_text"]
         context = q.get("context", "")
         key = (speaker, context)

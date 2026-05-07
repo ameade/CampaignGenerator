@@ -65,10 +65,24 @@ const runParams = computed(() => ({
   model: config.model,
 }))
 
-function onDone(rc: number) {
-  if (rc === 0) {
-    config.values.sd_session_summary = resolvePath(vttOutput.value)
-    config.values.sd_roleplay_summary = resolvePath(roleplayOutput.value)
+async function onDone(rc: number) {
+  if (rc !== 0) return
+  const sessionSummary = resolvePath(vttOutput.value)
+  const roleplaySummary = resolvePath(roleplayOutput.value)
+  // Mirror into the legacy overlay so any unmigrated view that reads
+  // ``config.values.sd_*`` sees the new paths immediately.
+  config.values.sd_session_summary = sessionSummary
+  config.values.sd_roleplay_summary = roleplaySummary
+  // Persist to the typed section so the value survives a server restart
+  // (was the original VttSummary.vue:70-71 bug — values disappeared
+  // unless the user later toggled Batch or saved Settings).
+  try {
+    await config.updateSection('session_doc', {
+      session_summary: sessionSummary,
+      roleplay_summary: roleplaySummary,
+    })
+  } catch {
+    /* non-fatal: legacy overlay still holds the values for this session */
   }
 }
 

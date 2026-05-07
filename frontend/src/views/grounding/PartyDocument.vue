@@ -44,8 +44,28 @@ function loadFromConfig() {
   }
 }
 
-watch(mode, (m) => { config.values.party_mode = m })
-watch(partyConfigPath, (p) => { config.values.party_config_path = p })
+// Persist mode + config-path through the typed party section so the
+// values survive a server restart (these used to mutate config.values
+// without saving, evaporating on reload). Debounced to avoid a write
+// per keystroke on the path field.
+let partyPersistTimer: ReturnType<typeof setTimeout> | null = null
+function schedulePartyPersist() {
+  if (partyPersistTimer) clearTimeout(partyPersistTimer)
+  partyPersistTimer = setTimeout(() => {
+    config.updateSection('party', {
+      mode: mode.value,
+      config_path: partyConfigPath.value,
+    }).catch(() => { /* non-fatal — overlay still has the values */ })
+  }, 500)
+}
+watch(mode, (m) => {
+  config.values.party_mode = m
+  schedulePartyPersist()
+})
+watch(partyConfigPath, (p) => {
+  config.values.party_config_path = p
+  schedulePartyPersist()
+})
 
 const charFiles = computed(() =>
   characters.value.split('\n').map(l => l.trim()).filter(Boolean)

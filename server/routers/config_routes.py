@@ -1,9 +1,19 @@
-"""Config API routes — load/save ui_config, path validation, status."""
+"""Config API routes — load/save ui_config, path validation, status.
+
+Step C of the configuration unification. The new typed endpoints
+(``PUT /api/config/section/{name}``, ``PUT /api/config/local``) live
+alongside the legacy bulk-merge / raw-YAML endpoints. ``GET /`` returns
+the merged "new shape" plus every legacy flat key (`sd_*`, `vtt_*`, …)
+at the top level so the un-reshaped frontend keeps working until step E.
+
+Step F removes the legacy endpoints, the legacy-flat overlay in ``GET /``,
+and the raw-YAML editor.
+"""
 
 from pathlib import Path
 
 import yaml
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException, Request
 from pydantic import BaseModel
 
 from server.config import (
@@ -12,22 +22,56 @@ from server.config import (
     api_key_present,
     derive_campaign_paths,
     derive_session_paths,
-    find_ui_config,
     load_ui_config,
-    load_ui_config_raw,
     path_exists,
     save_ui_config,
-    save_ui_config_raw,
 )
+from server.config_migration import flatten_resolved_to_legacy
+from server.config_models import SCHEMA_VERSION, UI_SECTION_NAMES
 
 router = APIRouter()
 
 
+# ── GET / — service-aware: new shape with legacy flat overlay ──────────────
+
+
 @router.get("/")
-def get_config():
-    """Return the full ui_config.yaml contents."""
-    cfg = load_ui_config()
-    return cfg
+def get_config(request: Request):
+    """Return current configuration.
+
+    When the unified service is available (campaign_dir resolved at boot),
+    the response includes both the typed/resolved view and a flat overlay
+    of legacy keys at the top level for un-reshaped frontend code. When the
+    service is not available, falls back to the pre-refactor behaviour
+    (raw ``ui_config.yaml`` dict).
+    """
+    service = getattr(request.app.state, "config_service", None)
+    if service is None:
+        return load_ui_config()
+
+    resolved = service.resolved()
+    # Flatten from the resolved view so boot overrides (--session-dir,
+    # --narrate-tokens, …) flow into the legacy overlay without being
+    # persisted to disk. This restores the pre-refactor UX where a CLI
+    # flag at startup pre-populated form fields.
+    legacy = flatten_resolved_to_legacy(resolved)
+    new_shape = {
+        "campaign_dir": str(service.campaign_dir),
+        "config_path": str(service.config_path),
+        "ui_state_path": str(service.ui_state_path),
+        "local_config_path": str(service.local_config_path),
+        "schema_version": SCHEMA_VERSION,
+        "resolved": resolved,
+        "tracked": service.tracked,
+        "local": service.local.model_dump(mode="json"),
+        "migration_warnings": list(service.migration_warnings),
+    }
+    # Spread legacy flat keys first; new-shape fields take precedence on any
+    # collision so the authoritative paths and metadata win.
+    return {**legacy, **new_shape}
+
+
+# ── Legacy bulk-merge endpoint (removed in step F) ─────────────────────────
 
 
 class ConfigUpdate(BaseModel):
@@ -36,29 +80,64 @@ class ConfigUpdate(BaseModel):
 
 @router.put("/")
 def put_config(update: ConfigUpdate):
-    """Merge values into ui_config.yaml."""
+    """Merge values into ui_config.yaml (legacy)."""
     save_ui_config(update.values)
     return {"ok": True}
 
 
-@router.get("/raw")
-def get_config_raw():
-    """Return the raw YAML text and file path."""
-    return {"text": load_ui_config_raw(), "path": str(find_ui_config())}
+# ── Typed section update — replaces PUT / in step E onwards ────────────────
 
 
-class ConfigRawUpdate(BaseModel):
-    text: str
+class SectionUpdate(BaseModel):
+    values: dict
 
 
-@router.put("/raw")
-def put_config_raw(update: ConfigRawUpdate):
-    """Overwrite ui_config.yaml with raw YAML text."""
+@router.put("/section/{name}")
+def put_config_section(name: str, update: SectionUpdate, request: Request):
+    """Merge ``update.values`` into ``ui.<name>`` and persist."""
+    service = getattr(request.app.state, "config_service", None)
+    if service is None:
+        raise HTTPException(
+            status_code=503,
+            detail="config service not initialized — campaign_dir not resolved at boot",
+        )
+    if name not in UI_SECTION_NAMES:
+        raise HTTPException(
+            status_code=404,
+            detail=f"unknown UI section {name!r}; valid: {', '.join(UI_SECTION_NAMES)}",
+        )
+    service.update_section(name, update.values)
+    return {"ok": True}
+
+
+# ── Local (machine-only) updates ───────────────────────────────────────────
+
+
+class LocalUpdate(BaseModel):
+    values: dict
+
+
+@router.put("/local")
+def put_config_local(update: LocalUpdate, request: Request):
+    """Merge ``update.values`` into ``.campaigngenerator.local.yaml``.
+
+    Top-level keys are ``server`` (host/port) and ``nav`` (transient
+    browser state). Anything else is rejected by the typed model.
+    """
+    service = getattr(request.app.state, "config_service", None)
+    if service is None:
+        raise HTTPException(
+            status_code=503,
+            detail="config service not initialized",
+        )
     try:
-        save_ui_config_raw(update.text)
-        return {"ok": True}
-    except Exception as e:
-        return {"ok": False, "error": str(e)}
+        service.update_local(update.values)
+    except Exception as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    return {"ok": True}
+
+
+# ── Path-derivation helpers (unchanged) ────────────────────────────────────
 
 
 @router.get("/campaign-paths")

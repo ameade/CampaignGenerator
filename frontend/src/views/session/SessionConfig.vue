@@ -41,6 +41,9 @@ function loadFromConfig() {
 }
 
 function saveToConfig() {
+  // Mirror into the legacy overlay so other views still on the flat
+  // shape see updates immediately. Persistence happens in saveConfig()
+  // (typed sections) and onBlur (debounced auto-save below).
   Object.assign(config.values, {
     campaign_dir: campaignDir.value,
     session_dir: sessionDir.value,
@@ -55,6 +58,31 @@ function saveToConfig() {
     vtt_session_name: vttSessionName.value,
     summaries: summaries.value,
   })
+}
+
+async function persistTypedSections() {
+  const contextList = vttContext.value
+    .split('\n')
+    .map((s) => s.trim())
+    .filter((s) => s)
+  await Promise.all([
+    config.updateSection('session_doc', {
+      session: sdSession.value || null,
+      characters: characters.value || null,
+      gm_player: gmPlayer.value || null,
+      voice_dir: voiceDir.value || null,
+      examples_dir: examplesDir.value || null,
+    }),
+    config.updateSection('vtt_summary', {
+      input: vttInput.value || null,
+      context: contextList,
+      date: vttDate.value || null,
+      session_name: vttSessionName.value || null,
+    }),
+    config.updateSection('grounding', {
+      summaries: summaries.value || null,
+    }),
+  ])
 }
 
 /**
@@ -143,6 +171,12 @@ function onBlur() {
 
 async function saveConfig() {
   saveToConfig()
+  // Typed sections — survive a server restart through the unified service.
+  await persistTypedSections()
+  // Legacy bulk save — still needed for top-level keys that don't fit a
+  // typed section yet (campaign_dir, session_dir, summaries-derived flat
+  // keys written by deriveAll). Removed in step F together with the
+  // legacy PUT /api/config/ endpoint.
   await apiPut('/api/config/', { values: config.values })
 }
 
