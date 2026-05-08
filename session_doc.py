@@ -1224,10 +1224,12 @@ def main() -> None:
 
     session_summary: str = ""
     if args.session_summary:
-        session_summary = load_file_optional(args.session_summary, "--session-summary file") or ""
-        if session_summary:
-            session_summary = normalize(session_summary)
-            print(f"  Session summary:      {Path(args.session_summary).name} ({len(session_summary):,} chars)")
+        _p = Path(args.session_summary).expanduser()
+        if not _p.exists():
+            print(f"Error: --session-summary file not found: {_p}", file=sys.stderr)
+            sys.exit(1)
+        session_summary = normalize(_p.read_text(encoding="utf-8"))
+        print(f"  Session summary:      {_p.name} ({len(session_summary):,} chars)")
 
     context_parts: list[str] = []
     if args.context:
@@ -1243,11 +1245,14 @@ def main() -> None:
     party: str | None = None
     roster: str = ""
     if args.party:
-        party = load_file_optional(args.party, "party file")
-        if party:
-            roster = extract_character_roster(party)
-            if roster:
-                print(f"  Character roster: {roster.count(chr(10)) + 1} character(s)")
+        _p = Path(args.party).expanduser()
+        if not _p.exists():
+            print(f"Error: --party file not found: {_p}", file=sys.stderr)
+            sys.exit(1)
+        party = _p.read_text(encoding="utf-8")
+        roster = extract_character_roster(party)
+        if roster:
+            print(f"  Character roster: {roster.count(chr(10)) + 1} character(s)")
 
     voice_files: dict[str, str] = {}
     if args.voice_dir:
@@ -1262,9 +1267,12 @@ def main() -> None:
 
     roleplay_summary: str | None = None
     if args.roleplay_summary:
-        roleplay_summary = load_file_optional(args.roleplay_summary, "roleplay summary")
-        if roleplay_summary:
-            print(f"  Roleplay summary: {Path(args.roleplay_summary).name} ({len(roleplay_summary):,} chars)")
+        _p = Path(args.roleplay_summary).expanduser()
+        if not _p.exists():
+            print(f"Error: --roleplay-summary file not found: {_p}", file=sys.stderr)
+            sys.exit(1)
+        roleplay_summary = _p.read_text(encoding="utf-8")
+        print(f"  Roleplay summary: {_p.name} ({len(roleplay_summary):,} chars)")
 
     examples_text: str | None = None
     if args.examples:
@@ -1313,9 +1321,12 @@ def main() -> None:
     # Load enhanced sections (Pass 2 output saved from a prior run)
     enhanced_sections: str = ""
     if args.enhanced_sections:
-        enhanced_sections = load_file_optional(args.enhanced_sections, "--enhanced-sections file") or ""
-        if enhanced_sections:
-            print(f"  Enhanced sections: {Path(args.enhanced_sections).name} ({len(enhanced_sections):,} chars)")
+        _p = Path(args.enhanced_sections).expanduser()
+        if not _p.exists():
+            print(f"Error: --enhanced-sections file not found: {_p}", file=sys.stderr)
+            sys.exit(1)
+        enhanced_sections = _p.read_text(encoding="utf-8")
+        print(f"  Enhanced sections: {_p.name} ({len(enhanced_sections):,} chars)")
     elif from_extractions_dir:
         auto_enhanced = from_extractions_dir / "enhanced_sections.md"
         if auto_enhanced.exists():
@@ -1326,10 +1337,15 @@ def main() -> None:
 
     single_narrator = args.narrator.strip() if args.narrator else None
 
+    # Re-narration: explicit plan + scene filter means Passes 1–2 already ran.
+    renarration_mode = bool(args.plan_file and args.scene)
+
     # ── Pass 1: Consistency check ─────────────────────────────────────────────
     consistency_report = ""
     if from_extractions_dir:
         print("\n[Passes 1–4: Skipped — loading extractions from disk]")
+    elif renarration_mode:
+        print("\n[Pass 1: Skipped — re-narration (--plan-file + --scene)]")
     elif single_narrator:
         print(f"\n[Pass 1: Skipped — single-narrator mode ({single_narrator})]")
     elif enhanced_sections:
@@ -1374,6 +1390,8 @@ def main() -> None:
     if from_extractions_dir or single_narrator:
         if not from_extractions_dir:
             print(f"[Pass 2: Skipped — single-narrator mode]")
+    elif renarration_mode:
+        print("\n[Pass 2: Skipped — re-narration (--plan-file + --scene)]")
     elif enhanced_sections:
         print(f"\n[Pass 2: Skipped — using pre-saved enhanced sections ({len(enhanced_sections):,} chars)]")
     else:
