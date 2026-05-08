@@ -314,13 +314,58 @@ class TestAtomicWrites:
 
 
 class TestResolvedView:
-    def test_resolved_paths_are_absolute(self, fresh_campaign):
+    def test_campaign_relative_path_resolves_against_campaign_dir(
+        self, fresh_campaign
+    ):
+        # voice_dir is campaign-scoped (lives at <campaign>/voice/).
         svc = CampaignConfigService(fresh_campaign)
         svc.update_section("session_doc", {"voice_dir": "voice/"})
         resolved = svc.resolved()
         voice = resolved["ui"]["session_doc"]["voice_dir"]
         assert Path(voice).is_absolute()
         assert voice == str((fresh_campaign / "voice").resolve())
+
+    def test_session_relative_path_resolves_against_session_dir(
+        self, fresh_campaign
+    ):
+        # The user-reported bug: a relative `session_summary` was landing
+        # in the campaign root instead of the session dir.
+        svc = CampaignConfigService(fresh_campaign)
+        svc.update_section("session_doc", {"session_summary": "session-summary.md"})
+        svc.update_section("grounding", {"summaries": "summaries.md"})
+        # Without a session_dir set, the legacy fallback to campaign_dir
+        # still applies.
+        no_sd = svc.resolved()
+        assert no_sd["ui"]["session_doc"]["session_summary"] == \
+            str((fresh_campaign / "session-summary.md").resolve())
+
+        # With session_dir set, session-scoped paths resolve there.
+        svc2 = CampaignConfigService(
+            fresh_campaign,
+            boot_overrides={"runtime.session_dir": "summaries/sess1"},
+        )
+        svc2.update_section(
+            "session_doc", {"session_summary": "session-summary.md"}
+        )
+        svc2.update_section("grounding", {"summaries": "summaries.md"})
+        with_sd = svc2.resolved()
+        # session-scoped → resolves against session_dir
+        assert with_sd["ui"]["session_doc"]["session_summary"] == str(
+            (fresh_campaign / "summaries" / "sess1" / "session-summary.md").resolve()
+        )
+        # campaign-scoped → still campaign root, even with session_dir set
+        assert with_sd["ui"]["grounding"]["summaries"] == str(
+            (fresh_campaign / "summaries.md").resolve()
+        )
+
+    def test_absolute_path_overrides_base(self, fresh_campaign, tmp_path):
+        # Absolute paths pass through regardless of base hint.
+        elsewhere = tmp_path / "elsewhere" / "file.md"
+        svc = CampaignConfigService(fresh_campaign)
+        svc.update_section("session_doc", {"session_summary": str(elsewhere)})
+        resolved = svc.resolved()
+        assert resolved["ui"]["session_doc"]["session_summary"] == \
+            str(elsewhere.resolve())
 
     def test_non_path_fields_pass_through(self, fresh_campaign):
         svc = CampaignConfigService(fresh_campaign)

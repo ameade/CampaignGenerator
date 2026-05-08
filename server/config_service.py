@@ -45,41 +45,43 @@ LEGACY_UI_CONFIG_NAME = "ui_config.yaml"
 MIGRATION_MARKER_NAME = "ui_config.yaml.migrated"
 
 # ── Path-field knowledge ──────────────────────────────────────────────────
-# Per-section sets of fields whose values are filesystem paths and should be
-# resolved against ``campaign_dir`` for the ``resolved`` view. Anything not
+# Per-section, per-field base for path resolution. ``"session"`` resolves
+# against ``runtime.session_dir`` (falling back to campaign_dir when that's
+# unset); ``"campaign"`` resolves against the campaign root. Anything not
 # listed here is passed through unchanged.
+#
+# The split matches the old ``derive_campaign_paths`` semantics: per-session
+# files (gm-assist, session-summary, scene_extractions/, …) live under the
+# session dir; campaign-wide assets (party.md, voice/, examples/, the
+# canonical timeline summaries.md) live under the campaign root.
 
-_PATH_FIELDS: dict[str, frozenset[str]] = {
-    "session_doc": frozenset(
-        {
-            "session",
-            "extract_dir",
-            "roleplay_dir",
-            "output_dir",
-            "summary_dir",
-            "session_summary",
-            "scene_extractions_dir",
-            "narration_dir",
-            "roleplay_summary",
-            "party",
-            "voice_dir",
-            "examples_dir",
-        }
-    ),
-    "vtt_summary": frozenset(
-        {
-            "input",
-            "output",
-            "roleplay_output",
-            "extract_dir",
-            "session_summary",
-            "roleplay_summary",
-        }
-    ),
-    "grounding": frozenset({"summaries"}),
+_PATH_FIELDS: dict[str, dict[str, str]] = {
+    "session_doc": {
+        "session": "session",
+        "extract_dir": "session",
+        "roleplay_dir": "session",
+        "output_dir": "session",
+        "summary_dir": "session",
+        "session_summary": "session",
+        "scene_extractions_dir": "session",
+        "narration_dir": "session",
+        "roleplay_summary": "session",
+        "party": "campaign",
+        "voice_dir": "campaign",
+        "examples_dir": "campaign",
+    },
+    "vtt_summary": {
+        "input": "session",
+        "output": "session",
+        "roleplay_output": "session",
+        "extract_dir": "session",
+        "session_summary": "session",
+        "roleplay_summary": "session",
+    },
+    "grounding": {"summaries": "campaign"},
 }
 
-_RUNTIME_PATH_FIELDS: frozenset[str] = frozenset({"session_dir"})
+_RUNTIME_PATH_FIELDS: dict[str, str] = {"session_dir": "campaign"}
 
 
 # ── Errors ─────────────────────────────────────────────────────────────────
@@ -309,11 +311,26 @@ class CampaignConfigService:
     def local(self) -> LocalConfig:
         return self._local
 
-    def resolve_path(self, value: str | None) -> str | None:
-        """Resolve a path string against ``campaign_dir``.
+    def resolve_path(
+        self,
+        value: str | None,
+        *,
+        base: str = "campaign",
+        session_dir: str | None = None,
+    ) -> str | None:
+        """Resolve a path string to absolute.
 
-        Absolute paths and ``~``-expansions pass through. ``None`` /
-        empty strings stay as ``None`` so the API surface is uniform.
+        ``base`` selects the directory a relative path is resolved against:
+        ``"campaign"`` (the campaign root) or ``"session"`` (the
+        ``runtime.session_dir`` value, falling back to campaign_dir when
+        session_dir is unset). Absolute paths and ``~``-expansions pass
+        through. ``None`` / empty strings stay as ``None`` so the API
+        surface is uniform.
+
+        ``session_dir`` lets the caller pass an explicit session-dir
+        override (used by :meth:`resolved` to ensure boot CLI overrides
+        of ``runtime.session_dir`` win without persisting). When omitted,
+        the value from the persisted ui_state is used.
         """
         if value is None:
             return None
@@ -321,39 +338,34 @@ class CampaignConfigService:
         if not s:
             return None
         p = Path(s).expanduser()
-        if not p.is_absolute():
-            p = (self.campaign_dir / p).resolve()
-        else:
-            p = p.resolve()
-        return str(p)
+        if p.is_absolute():
+            return str(p.resolve())
+        if base == "session":
+            sd = session_dir or self._ui_state.runtime.session_dir
+            if sd:
+                base_path = Path(sd).expanduser()
+                if not base_path.is_absolute():
+                    base_path = (self.campaign_dir / base_path).resolve()
+                return str((base_path / p).resolve())
+            # session_dir unset → fall back to campaign root rather than
+            # leave the path relative; downstream consumers expect absolute.
+        return str((self.campaign_dir / p).resolve())
 
     def resolved(self) -> dict[str, Any]:
-        """Typed read view with paths resolved against ``campaign_dir`` and
-        boot overrides applied. Returned as plain dicts for JSON friendliness.
+        """Typed read view with paths resolved (per-field base) and boot
+        overrides applied. Returned as plain dicts for JSON friendliness.
         """
         ui_raw = self._ui_state.ui.model_dump(mode="json")
         runtime_raw = self._ui_state.runtime.model_dump(mode="json")
         local_raw = self._local.model_dump(mode="json")
 
-        # Apply path resolution per known section.
-        for section, fields in _PATH_FIELDS.items():
-            if section not in ui_raw or not isinstance(ui_raw[section], dict):
-                continue
-            for fname in fields:
-                if fname in ui_raw[section]:
-                    ui_raw[section][fname] = self.resolve_path(
-                        ui_raw[section][fname]
-                    )
-
-        for fname in _RUNTIME_PATH_FIELDS:
-            if fname in runtime_raw:
-                runtime_raw[fname] = self.resolve_path(runtime_raw[fname])
-
-        # Apply boot overrides last so CLI flags always win for this process.
+        # Boot overrides must be applied to the path-resolution context BEFORE
+        # we resolve session-relative paths — otherwise an override of
+        # runtime.session_dir wouldn't change where session-scoped paths land.
+        # We apply overrides into the raw dicts first, then resolve.
         for key, value in self.boot_overrides.items():
             section, dot, field = key.partition(".")
             if not dot:
-                # Flat override → land in runtime.<key>.
                 runtime_raw[key] = value
                 continue
             if section == "runtime":
@@ -362,6 +374,25 @@ class CampaignConfigService:
                 local_raw.setdefault("server", {})[field] = value
             else:
                 ui_raw.setdefault(section, {})[field] = value
+
+        active_session_dir = runtime_raw.get("session_dir")
+
+        for section, fields in _PATH_FIELDS.items():
+            if section not in ui_raw or not isinstance(ui_raw[section], dict):
+                continue
+            for fname, base in fields.items():
+                if fname in ui_raw[section]:
+                    ui_raw[section][fname] = self.resolve_path(
+                        ui_raw[section][fname],
+                        base=base,
+                        session_dir=active_session_dir,
+                    )
+
+        for fname, base in _RUNTIME_PATH_FIELDS.items():
+            if fname in runtime_raw:
+                runtime_raw[fname] = self.resolve_path(
+                    runtime_raw[fname], base=base,
+                )
 
         return {
             "campaign_dir": str(self.campaign_dir),
