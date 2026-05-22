@@ -11,9 +11,6 @@ import type { Scene } from '../../components/scene-editor/SceneList.vue'
 import ExtractionEditor from '../../components/scene-editor/ExtractionEditor.vue'
 import NarrationOutput from '../../components/scene-editor/NarrationOutput.vue'
 import VttPanel from '../../components/scene-editor/VttPanel.vue'
-import QuoteLedger from '../../components/scene-editor/QuoteLedger.vue'
-import QuoteAssignmentPanel from '../../components/scene-editor/QuoteAssignmentPanel.vue'
-import QuotePicker from '../../components/scene-editor/QuotePicker.vue'
 
 const config = useConfigStore()
 
@@ -23,10 +20,7 @@ const configError = ref('')
 
 // Form fields for editor config
 const session = ref('')
-const extractDir = ref('')
-const roleplayExtractDir = ref('')
 const outputDir = ref('')
-const summaryExtractDir = ref('')
 const sessionSummary = ref('')
 const sceneExtractionsDir = ref('')
 const narrationDir = ref('')
@@ -52,10 +46,7 @@ const backend = ref<'anthropic' | 'dgx'>('anthropic')
 function loadConfigFields() {
   const v = config.values
   session.value = v.sd_session || ''
-  extractDir.value = v.sd_extract_dir || 'scene_extractions'
-  roleplayExtractDir.value = v.sd_roleplay_dir || 'vtt_roleplay_extractions'
   outputDir.value = v.sd_output_dir || v.session_dir || ''
-  summaryExtractDir.value = v.sd_summary_dir || 'vtt_extractions'
   sessionSummary.value = v.sd_session_summary || 'session-summary.md'
   sceneExtractionsDir.value = v.sd_scene_extractions_dir || 'scene_extractions_new'
   narrationDir.value = v.sd_narration_dir || 'narration'
@@ -99,18 +90,14 @@ async function setBackend(b: 'anthropic' | 'dgx') {
 const contextFiles = computed(() => resolvePathList(context.value))
 
 const configReady = computed(() =>
-  !!(session.value.trim() &&
-     (sceneExtractionsDir.value.trim() || extractDir.value.trim()))
+  !!(session.value.trim() && sceneExtractionsDir.value.trim())
 )
 
 async function applyConfig() {
   configError.value = ''
   const editorConfig = {
     session: resolvePath(session.value),
-    extract_dir: resolvePath(extractDir.value),
-    roleplay_extract_dir: resolvePath(roleplayExtractDir.value),
     output_dir: resolvePath(outputDir.value) || config.cwd || '',
-    summary_extract_dir: resolvePath(summaryExtractDir.value) || undefined,
     session_summary: resolvePath(sessionSummary.value) || undefined,
     scene_extractions_dir: resolvePath(sceneExtractionsDir.value) || undefined,
     narration_dir: resolvePath(narrationDir.value) || undefined,
@@ -143,9 +130,6 @@ async function loadEnhancedSections() {
   hasEnhanced.value = data.exists || false
 }
 
-// ── Mode toggle ──────────────────────────────────────────────────
-const editorMode = ref<'quotes' | 'editor'>('quotes')
-
 // ── Scene state ───────────────────────────────────────────────────
 const scenes = ref<Scene[]>([])
 const currentScene = ref<number | null>(null)
@@ -162,101 +146,11 @@ const enhancing = ref(false)
 const planning = ref(false)
 const narrationOutput = ref('')
 const statusMsg = ref('')
-const rightTab = ref<'vtt' | 'ledger'>('vtt')
 const enhancedContent = ref('')
 const hasEnhanced = ref(false)
 const assembledExists = ref(false)
 
 const activeSSE = ref<EventSource | null>(null)
-
-// ── Quote state ──────────────────────────────────────────────────
-const quoteCounts = ref<Record<number, number>>({})
-const syncing = ref(false)
-const autoAssigning = ref(false)
-const showPicker = ref(false)
-const assignmentPanel = ref<InstanceType<typeof QuoteAssignmentPanel> | null>(null)
-
-async function loadQuoteCounts() {
-  try {
-    const data = await apiFetch('/api/ledger/quotes')
-    const counts: Record<number, number> = {}
-    for (const s of data.scenes || []) {
-      counts[s.index] = s.quotes.length
-    }
-    quoteCounts.value = counts
-  } catch {
-    // Ledger may not be synced yet
-  }
-}
-
-async function syncQuotes() {
-  syncing.value = true
-  setStatus('Syncing quotes...')
-  try {
-    const result = await apiPost('/api/ledger/sync')
-    setStatus(`Synced: ${result.total} quotes, ${result.matched} matched`)
-    await loadQuoteCounts()
-    assignmentPanel.value?.reload()
-  } catch {
-    setStatus('Sync error')
-  }
-  syncing.value = false
-}
-
-async function autoAssign() {
-  autoAssigning.value = true
-  narrationOutput.value = ''
-  setStatus('Running auto-assign...')
-
-  activeSSE.value = connectSSE('/api/ledger/auto-assign', {
-    onData(text) {
-      narrationOutput.value += text
-    },
-    onDone(rc) {
-      activeSSE.value = null
-      autoAssigning.value = false
-      setStatus(rc === 0 ? 'Auto-assign complete.' : 'Auto-assign failed.')
-      loadQuoteCounts()
-      assignmentPanel.value?.reload()
-    },
-    onError() {
-      activeSSE.value = null
-      autoAssigning.value = false
-      setStatus('Auto-assign stream error.')
-    },
-  })
-}
-
-async function generateExtraction(sceneNum: number) {
-  narrationOutput.value = ''
-  setStatus(`Generating extraction for scene ${sceneNum}...`)
-
-  activeSSE.value = connectSSE(`/api/ledger/generate-extraction/${sceneNum}`, {
-    onData(text) {
-      narrationOutput.value += text
-    },
-    onDone(rc) {
-      activeSSE.value = null
-      setStatus(rc === 0 ? 'Extraction generated.' : 'Generation failed.')
-      loadScenes()
-    },
-    onError() {
-      activeSSE.value = null
-      setStatus('Generation stream error.')
-    },
-  })
-}
-
-function onPickerAdded(count: number) {
-  showPicker.value = false
-  setStatus(`Added ${count} quotes`)
-  loadQuoteCounts()
-  assignmentPanel.value?.reload()
-}
-
-function onQuotesChanged() {
-  loadQuoteCounts()
-}
 
 // ── Scene navigation ─────────────────────────────────────────────
 
@@ -282,11 +176,7 @@ async function setReviewed(reviewed: boolean) {
 
 async function selectScene(n: number) {
   currentScene.value = n
-
-  // Only load extraction data if in editor mode (quote panel loads its own data)
-  if (editorMode.value === 'editor') {
-    await loadEditorScene(n)
-  }
+  await loadEditorScene(n)
 }
 
 async function loadEditorScene(n: number) {
@@ -336,7 +226,7 @@ async function narrate() {
     onError() {
       activeSSE.value = null
       narrating.value = false
-      setStatus('Stream error \u2014 check terminal.')
+      setStatus('Stream error — check terminal.')
     },
   })
 }
@@ -419,7 +309,7 @@ async function runExtract() {
     onError() {
       activeSSE.value = null
       extracting.value = false
-      setStatus('Stream error \u2014 check terminal.')
+      setStatus('Stream error — check terminal.')
     },
   })
 }
@@ -467,12 +357,12 @@ async function runEnhance() {
     onDone(rc) {
       activeSSE.value = null
       enhancing.value = false
-      setStatus(rc === 0 ? 'Stage 1 complete \u2014 review session-summary.md.' : 'Stage 1 failed.')
+      setStatus(rc === 0 ? 'Stage 1 complete — review session-summary.md.' : 'Stage 1 failed.')
     },
     onError() {
       activeSSE.value = null
       enhancing.value = false
-      setStatus('Stream error \u2014 check terminal.')
+      setStatus('Stream error — check terminal.')
     },
   })
 }
@@ -491,7 +381,7 @@ async function assembleDoc() {
   try {
     const data = await apiPost('/api/editor/assemble')
     if (data.ok) {
-      setStatus(`Saved \u2192 ${data.filename} (${data.scenes_included} scenes)`)
+      setStatus(`Saved → ${data.filename} (${data.scenes_included} scenes)`)
       assembledExists.value = true
     } else {
       setStatus(`Assembly failed: ${data.error}`)
@@ -529,14 +419,6 @@ function backToConfig() {
   configured.value = false
 }
 
-// When switching to editor mode and a scene is selected, load its extraction
-function onModeChange(mode: 'quotes' | 'editor') {
-  editorMode.value = mode
-  if (mode === 'editor' && currentScene.value !== null) {
-    loadEditorScene(currentScene.value)
-  }
-}
-
 // ── Init ──────────────────────────────────────────────────────────
 onMounted(async () => {
   loadConfigFields()
@@ -544,11 +426,11 @@ onMounted(async () => {
   // Check if editor is already configured (e.g. from CLI startup)
   try {
     const existing = await apiFetch('/api/editor/config')
-    if (existing.session && (existing.scene_extractions_dir || existing.extract_dir)) {
+    if (existing.session && existing.scene_extractions_dir) {
       configured.value = true
       await loadScenes()
       await checkAssembled()
-      await loadQuoteCounts()
+      await loadEnhancedSections()
       return
     }
   } catch { /* not configured yet */ }
@@ -556,7 +438,6 @@ onMounted(async () => {
   // Auto-apply if we have enough from the config store
   if (configReady.value) {
     await applyConfig()
-    await loadQuoteCounts()
   }
 })
 </script>
@@ -646,12 +527,6 @@ onMounted(async () => {
           </button>
 
           <div v-if="showOverrides" class="advanced-panel">
-            <PathField v-model="extractDir" label="Legacy extractions directory"
-              help="Old-flow Pass-4 extractions. Used as fallback only when Scene extractions directory is empty." />
-            <PathField v-model="roleplayExtractDir" label="Roleplay extractions directory"
-              help="vtt_roleplay_extractions/ — shown in the VTT panel for reference." />
-            <PathField v-model="summaryExtractDir" label="Summary extractions directory"
-              help="vtt_extractions/ — event context for narration." />
             <PathField v-model="party" label="Party document"
               help="party.md — backstory, personality, relationships." />
             <PathField v-model="voiceDir" label="Voice files directory"
@@ -686,20 +561,6 @@ onMounted(async () => {
     <!-- Header -->
     <header class="editor-global-header">
       <h1>Session Doc</h1>
-
-      <!-- Mode toggle -->
-      <div class="mode-toggle">
-        <button
-          class="mode-btn"
-          :class="{ active: editorMode === 'quotes' }"
-          @click="onModeChange('quotes')"
-        >Quotes</button>
-        <button
-          class="mode-btn"
-          :class="{ active: editorMode === 'editor' }"
-          @click="onModeChange('editor')"
-        >Editor</button>
-      </div>
 
       <span class="status-msg">{{ statusMsg }}</span>
 
@@ -737,8 +598,8 @@ onMounted(async () => {
           class="btn-neutral btn-sm"
           :disabled="enhancing || extracting || narrating || planning"
           @click="runEnhance"
-          title="Stage 1 \u2014 rebuild session-summary.md from VTT + gm-assist.md"
-        >{{ enhancing ? 'Enhancing\u2026' : 'Enhance Summary' }}</button>
+          title="Stage 1 — rebuild session-summary.md from VTT + gm-assist.md"
+        >{{ enhancing ? 'Enhancing…' : 'Enhance Summary' }}</button>
       </span>
 
       <span class="stage-group">
@@ -747,8 +608,8 @@ onMounted(async () => {
           class="btn-neutral btn-sm"
           :disabled="enhancing || extracting || narrating || planning"
           @click="runExtract"
-          title="Stage 2 \u2014 rebuild per-scene quote files from session-summary.md"
-        >{{ extracting ? 'Re-extracting\u2026' : 'Re-Extract Quotes' }}</button>
+          title="Stage 2 — rebuild per-scene quote files from session-summary.md"
+        >{{ extracting ? 'Re-extracting…' : 'Re-Extract Quotes' }}</button>
       </span>
 
       <span class="stage-group">
@@ -757,8 +618,8 @@ onMounted(async () => {
           class="btn-neutral btn-sm"
           :disabled="planning || enhancing || extracting || narrating"
           @click="runPlan"
-          title="Stage 3 \u2014 consistency check + plan + enhanced sections (run once per session, cached for Narrate)"
-        >{{ planning ? 'Planning\u2026' : 'Plan &amp; Check' }}</button>
+          title="Stage 3 — consistency check + plan + enhanced sections (run once per session, cached for Narrate)"
+        >{{ planning ? 'Planning…' : 'Plan &amp; Check' }}</button>
       </span>
 
       <span class="stage-group">
@@ -795,100 +656,52 @@ onMounted(async () => {
       <SceneList
         :scenes="scenes"
         :current-scene="currentScene"
-        :quote-counts="editorMode === 'quotes' ? quoteCounts : undefined"
-        :show-quote-actions="editorMode === 'quotes'"
-        :syncing="syncing"
-        :auto-assigning="autoAssigning"
         @select="selectScene"
-        @sync="syncQuotes"
-        @auto-assign="autoAssign"
       />
 
-      <!-- Center: depends on mode -->
-      <template v-if="editorMode === 'quotes'">
-        <QuoteAssignmentPanel
-          ref="assignmentPanel"
+      <!-- Center: extraction editor + narration output -->
+      <div class="center-col">
+        <ExtractionEditor
+          :extraction-content="extractionContent"
+          :enhanced-content="enhancedContent"
+          :has-enhanced="hasEnhanced"
+          :scene-label="sceneLabel"
+          :estimated-tokens="estimatedTokens"
+          :default-narrate-tokens="narrateTokens"
+          :has-extraction="hasExtraction"
           :current-scene="currentScene"
-          :scenes="scenes"
-          @status="setStatus"
-          @quotes-changed="onQuotesChanged"
-          @generate="generateExtraction"
-          @show-picker="showPicker = true"
+          :narrating="narrating"
+          :extracting="extracting"
+          :scrubbing="scrubbing"
+          :prose-mode="proseMode"
+          :reflections="reflections"
+          :use-enhanced-sections="useEnhancedSections"
+          :reviewed="currentSceneReviewed"
+          @save-extraction="saveExtraction"
+          @reload="reload"
+          @narrate="narrate"
+          @scrub="scrubScene"
+          @open-typora="openTypora"
+          @update:extraction-content="extractionContent = $event"
+          @update:prose-mode="proseMode = $event; apiPut('/api/editor/config', { prose_mode: $event || undefined })"
+          @update:reflections="reflections = $event; apiPut('/api/editor/config', { reflections: $event || undefined })"
+          @update:use-enhanced-sections="useEnhancedSections = $event"
+          @update:reviewed="setReviewed"
+          @load-enhanced="loadEnhancedSections"
         />
-      </template>
+        <NarrationOutput
+          :output="narrationOutput"
+          :current-scene="currentScene"
+          @clear="clearOutput"
+        />
+      </div>
 
-      <template v-else>
-        <div class="center-col">
-          <ExtractionEditor
-            :extraction-content="extractionContent"
-            :enhanced-content="enhancedContent"
-            :has-enhanced="hasEnhanced"
-            :scene-label="sceneLabel"
-            :estimated-tokens="estimatedTokens"
-            :default-narrate-tokens="narrateTokens"
-            :has-extraction="hasExtraction"
-            :current-scene="currentScene"
-            :narrating="narrating"
-            :extracting="extracting"
-            :scrubbing="scrubbing"
-            :prose-mode="proseMode"
-            :reflections="reflections"
-            :use-enhanced-sections="useEnhancedSections"
-            :reviewed="currentSceneReviewed"
-            @save-extraction="saveExtraction"
-            @reload="reload"
-            @narrate="narrate"
-            @scrub="scrubScene"
-            @open-typora="openTypora"
-            @update:extraction-content="extractionContent = $event"
-            @update:prose-mode="proseMode = $event; apiPut('/api/editor/config', { prose_mode: $event || undefined })"
-            @update:reflections="reflections = $event; apiPut('/api/editor/config', { reflections: $event || undefined })"
-            @update:use-enhanced-sections="useEnhancedSections = $event"
-            @update:reviewed="setReviewed"
-            @load-enhanced="loadEnhancedSections"
-          />
-          <NarrationOutput
-            :output="narrationOutput"
-            :current-scene="currentScene"
-            @clear="clearOutput"
-          />
-        </div>
-      </template>
-
-      <!-- Right: stream output (quotes mode) or VTT/Ledger (editor mode) -->
+      <!-- Right: VTT source -->
       <div class="right-panel">
-        <template v-if="editorMode === 'quotes'">
-          <div class="right-header">Stream Output</div>
-          <NarrationOutput
-            :output="narrationOutput"
-            :current-scene="currentScene"
-            @clear="clearOutput"
-          />
-        </template>
-        <template v-else>
-          <div class="tab-bar">
-            <div class="tab" :class="{ active: rightTab === 'vtt' }" @click="rightTab = 'vtt'">
-              VTT Source
-            </div>
-            <div class="tab" :class="{ active: rightTab === 'ledger' }" @click="rightTab = 'ledger'">
-              Quote Ledger
-            </div>
-          </div>
-          <VttPanel v-show="rightTab === 'vtt'" />
-          <QuoteLedger v-show="rightTab === 'ledger'" :current-scene="currentScene" />
-        </template>
+        <VttPanel />
       </div>
     </div>
   </div>
-
-  <!-- Quote Picker modal -->
-  <QuotePicker
-    v-if="showPicker && currentScene !== null"
-    :current-scene="currentScene"
-    :scenes="scenes"
-    @close="showPicker = false"
-    @added="onPickerAdded"
-  />
 </template>
 
 <style scoped>
@@ -961,30 +774,6 @@ onMounted(async () => {
   font-size: 13px;
   font-weight: 700;
   color: var(--mauve);
-}
-
-.mode-toggle {
-  display: flex;
-  border: 1px solid var(--bg-surface1);
-  border-radius: 4px;
-  overflow: hidden;
-}
-.mode-btn {
-  padding: 4px 12px;
-  font-size: 11px;
-  font-weight: 600;
-  background: var(--bg-base);
-  color: var(--text-sub);
-  border: none;
-  cursor: pointer;
-  transition: background .1s;
-}
-.mode-btn:not(:last-child) { border-right: 1px solid var(--bg-surface1); }
-.mode-btn:hover { background: var(--bg-surface0); }
-.mode-btn.active {
-  background: var(--bg-surface0);
-  color: var(--mauve);
-  font-weight: 700;
 }
 
 .status-msg {
@@ -1065,33 +854,4 @@ onMounted(async () => {
   flex-direction: column;
   overflow: hidden;
 }
-
-.right-header {
-  font-size: 10px;
-  font-weight: 700;
-  text-transform: uppercase;
-  letter-spacing: .08em;
-  color: var(--text-muted);
-  padding: 8px 12px;
-  border-bottom: 1px solid var(--bg-surface0);
-  flex-shrink: 0;
-}
-
-.tab-bar {
-  background: var(--bg-mantle);
-  border-bottom: 1px solid var(--bg-surface0);
-  display: flex;
-  flex-shrink: 0;
-}
-.tab {
-  padding: 6px 14px;
-  font-size: 11px;
-  font-weight: 600;
-  cursor: pointer;
-  border-bottom: 2px solid transparent;
-  color: var(--text-muted);
-  transition: color .1s;
-}
-.tab:hover { color: var(--text); }
-.tab.active { color: var(--mauve); border-bottom-color: var(--mauve); }
 </style>

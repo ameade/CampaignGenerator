@@ -12,7 +12,7 @@ from fastapi.staticfiles import StaticFiles
 from server.config import derive_campaign_paths, derive_session_paths
 from server.config_service import CampaignConfigService, ConfigError
 from server.routers import (
-    config_routes, connections, experimental, grounding, ledger, prep,
+    config_routes, connections, experimental, grounding, prep,
     scene_editor, session_workflow, setup,
 )
 
@@ -35,7 +35,6 @@ app.include_router(prep.router, prefix="/api/prep", tags=["prep"])
 app.include_router(setup.router, prefix="/api/setup", tags=["setup"])
 app.include_router(experimental.router, prefix="/api/experimental", tags=["experimental"])
 app.include_router(scene_editor.router, prefix="/api/editor", tags=["editor"])
-app.include_router(ledger.router, prefix="/api/ledger", tags=["ledger"])
 app.include_router(connections.router, prefix="/api/connections", tags=["connections"])
 
 # ── Static files (Vue build) ────────────────────────────────────────────────
@@ -199,9 +198,8 @@ def main() -> None:
         "work_dir": str(Path(".").resolve()),
     }
 
-    # Initialize editor and ledger with config
+    # Initialize editor with config
     scene_editor.init_editor_config(config)
-    ledger.init_ledger_config(config)
 
     # Construct the unified config service. Routers read everything through
     # it; there is no fallback path. A failure here is fatal — silently
