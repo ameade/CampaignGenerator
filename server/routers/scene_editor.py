@@ -11,7 +11,7 @@ Drives the four-stage pipeline:
 
 `roleplay_extract_dir` (typed `roleplay_dir`) points at the kept
 `vtt_roleplay_extractions/` directory produced by `vtt_summary.py` — it
-feeds the VTT panel and the quote ledger. It is NOT the deleted
+feeds the VTT panel. It is NOT the deleted
 `session-roleplay.md` synthesised-summary chain.
 """
 
@@ -28,16 +28,13 @@ from server.subprocess_runner import python_exe, stream_subprocess
 # ── Module-level state ──────────────────────────────────────────────────────
 # CONFIG is a derived view of the unified config service's resolved
 # session_doc state, refreshed before every editor request via the
-# _refresh_config_from_service router dependency. When the service is
-# unavailable (legacy boot path with no config.yaml), CONFIG holds whatever
-# init_editor_config() seeded at startup. Other modules (ledger.py) still
-# import CONFIG directly; the refresh dependency keeps it in sync.
+# _refresh_config_from_service router dependency.
 
 CONFIG: dict = {}
 SCRIPT_DIR = Path(__file__).resolve().parent.parent.parent  # CampaignGenerator/
 
 # Typed-field name → legacy CONFIG-dict-key. Used by _refresh and PUT to keep
-# the two namespaces in sync. Anything not listed maps 1:1.
+# the two namespaces in sync.
 _TYPED_TO_CONFIG_KEY: dict[str, str] = {
     "roleplay_dir": "roleplay_extract_dir",
     "summary_dir": "summary_extract_dir",
@@ -50,8 +47,8 @@ def _refresh_config_from_service(request: Request) -> None:
     """Sync CONFIG from the unified service before each request.
 
     The service is the single source of truth; CONFIG is a back-compat
-    materialization so the existing helpers (and ledger.py) keep reading
-    from a flat dict. No-op when the service isn't wired (legacy boot).
+    materialization so the existing helpers (and legacy scripts) keep reading
+    from a flat dict.
     """
     service = getattr(request.app.state, "config_service", None)
     if service is None:
@@ -71,14 +68,9 @@ router = APIRouter(dependencies=[Depends(_refresh_config_from_service)])
 
 
 def init_editor_config(config: dict) -> None:
-    """Seed CONFIG from main.py startup.
-
-    When the unified service is wired, ``_refresh_config_from_service``
-    overlays the resolved view on top of this seed before every request.
-    When it isn't (no config.yaml in the campaign), this remains the only
-    path that populates CONFIG — same behaviour as before the refactor.
-    """
+    """Seed CONFIG from main.py startup."""
     CONFIG.update(config)
+
 
 
 def _config_to_typed_payload(payload: dict) -> dict:
@@ -158,38 +150,17 @@ def _vtt_path() -> Path | None:
 
 
 def _scene_extractions_dir() -> Path | None:
-    """Stage 2 output dir. Prefer new key; fall back to old extract_dir."""
+    """Stage 2 output dir."""
     if CONFIG.get("scene_extractions_dir"):
         return Path(CONFIG["scene_extractions_dir"]).expanduser()
-    if CONFIG.get("extract_dir"):
-        return Path(CONFIG["extract_dir"]).expanduser()
     return None
 
 
 def _narration_dir() -> Path | None:
-    """Stage 3 output dir. Prefer new key; fall back to old output_dir."""
+    """Stage 3 output dir."""
     if CONFIG.get("narration_dir"):
         return Path(CONFIG["narration_dir"]).expanduser()
-    if CONFIG.get("output_dir"):
-        return Path(CONFIG["output_dir"]).expanduser()
     return None
-
-
-def _using_new_flow() -> bool:
-    """True when the new pipeline's plan / per-scene narration is in play."""
-    nd = _narration_dir()
-    if nd and (nd / "plan.md").exists():
-        return True
-    sx = _scene_extractions_dir()
-    if sx and any(sx.glob("[0-9][0-9]_*.md")):
-        # New-flow files are NN_<slug>.md (no narrator). Old-flow files are
-        # NN_<narrator>_<slug>.md. Distinguish by frontmatter — new-flow files
-        # have `source: gmassist` from scene_extract.py.
-        for f in sx.glob("[0-9][0-9]_*.md"):
-            head = f.read_text(encoding="utf-8", errors="replace")[:200]
-            if "source: gmassist" in head:
-                return True
-    return False
 
 
 def _narration_file_for_scene(n: int) -> Path | None:
@@ -197,8 +168,19 @@ def _narration_file_for_scene(n: int) -> Path | None:
     nd = _narration_dir()
     if not nd or not nd.is_dir():
         return None
-    matches = sorted(nd.glob(f"session_doc_scene_{n:02d}_*.md"))
+    matches = sorted(
+        f for f in nd.glob(f"session_doc_scene_{n:02d}_*.md")
+        if not f.name.endswith(".scrubbed.md")
+    )
     return matches[0] if matches else None
+
+
+def _scrubbed_for_scene(n: int) -> bool:
+    """True iff a `.scrubbed.md` sibling exists for scene n's narration file."""
+    narr = _narration_file_for_scene(n)
+    if narr is None:
+        return False
+    return narr.with_name(narr.stem + ".scrubbed.md").exists()
 
 
 def _scene_extraction_file_new(n: int, scene_name: str) -> Path | None:
@@ -226,47 +208,26 @@ def _load_scenes() -> list[dict]:
     Otherwise derive a bare scene list from the Stage-2 extraction filenames
     (NN_<slug>.md) and their `scene:` frontmatter — no narrator until first
     Narrate run generates plan.md via Pass 3.
-
-    Old flow: read extract_dir/plan.md and use NN_<narrator>_<slug>.md naming.
     """
     sys.path.insert(0, str(SCRIPT_DIR))
-    from session_doc import extraction_filename, parse_plan
+    from session_doc import parse_plan
 
-    new_flow = _using_new_flow()
-
-    # Prefer new-flow plan location, fall back to old.
-    plan_path: Path | None = None
     nd = _narration_dir()
+    plan_path: Path | None = None
     if nd and (nd / "plan.md").exists():
         plan_path = nd / "plan.md"
-    elif CONFIG.get("extract_dir"):
-        candidate = Path(CONFIG["extract_dir"]) / "plan.md"
-        if candidate.exists():
-            plan_path = candidate
 
-    # New flow with no plan.md yet — derive scenes from the Stage-2 files.
-    if plan_path is None and new_flow:
+    if plan_path is None:
         return _scenes_from_extractions()
-
-    if plan_path is None or not plan_path.exists():
-        return []
 
     sections = parse_plan(plan_path.read_text(encoding="utf-8"), total_chunks=99)
     result = []
     for i, s in enumerate(sections, 1):
-        if new_flow:
-            ext = _scene_extraction_file_new(i, s.get("scene", ""))
-            ext_path = ext if ext else None
-            ext_name = ext.name if ext else ""
-            narr_path = _narration_file_for_scene(i)
-            has_output = narr_path is not None and narr_path.exists()
-        else:
-            fname = extraction_filename(i, s["narrator"], s.get("scene", ""))
-            ext_dir = CONFIG.get("extract_dir")
-            ext_path = Path(ext_dir) / fname if ext_dir else None
-            ext_name = fname
-            out_dir = CONFIG.get("output_dir")
-            has_output = bool(out_dir and (Path(out_dir) / f"scene{i}.md").exists())
+        ext = _scene_extraction_file_new(i, s.get("scene", ""))
+        ext_path = ext if ext else None
+        ext_name = ext.name if ext else ""
+        narr_path = _narration_file_for_scene(i)
+        has_output = narr_path is not None and narr_path.exists()
         result.append({
             "index": i,
             "narrator": s["narrator"],
@@ -276,6 +237,7 @@ def _load_scenes() -> list[dict]:
             "chunk_end": s["chunk_end"],
             "has_extraction": bool(ext_path and ext_path.exists()),
             "has_output": has_output,
+            "has_scrubbed": _scrubbed_for_scene(i),
             "filename": ext_name,
             "reviewed": _reviewed_for_path(ext_path),
         })
@@ -316,6 +278,7 @@ def _scenes_from_extractions() -> list[dict]:
             "chunk_end": idx,
             "has_extraction": True,
             "has_output": narr_path is not None and narr_path.exists(),
+            "has_scrubbed": _scrubbed_for_scene(idx),
             "filename": f.name,
             "reviewed": _reviewed_for_path(f),
         })
@@ -327,9 +290,7 @@ def _get_extraction_path(n: int) -> Path | None:
     if n < 1 or n > len(scenes):
         return None
     s = scenes[n - 1]
-    if _using_new_flow():
-        return _scene_extraction_file_new(n, s.get("scene", ""))
-    return Path(CONFIG["extract_dir"]) / s["filename"] if CONFIG.get("extract_dir") else None
+    return _scene_extraction_file_new(n, s.get("scene", ""))
 
 
 def _reviewed_marker_path(n: int) -> Path | None:
@@ -368,6 +329,9 @@ def _assembled_output_path() -> Path:
     session_stem = Path(CONFIG["session"]).stem
     sd = _session_dir() or Path.cwd()
     return sd / f"{session_stem}-doc.md"
+
+
+
 
 
 # ── Command builders ────────────────────────────────────────────────────────
@@ -620,11 +584,7 @@ async def api_set_reviewed(n: int, request: Request):
 
 @router.get("/output/{n}")
 def api_get_output(n: int):
-    if _using_new_flow():
-        path = _narration_file_for_scene(n)
-    else:
-        out_dir = CONFIG.get("output_dir")
-        path = (Path(out_dir) / f"scene{n}.md") if out_dir else None
+    path = _narration_file_for_scene(n)
     if path is None or not path.exists():
         return JSONResponse({"exists": False}, status_code=404)
     return {"exists": True}
@@ -635,10 +595,6 @@ def api_get_enhanced_sections():
     nd = _narration_dir()
     if nd:
         path = nd / "enhanced_sections.md"
-        if path.exists():
-            return {"exists": True, "content": path.read_text(encoding="utf-8")}
-    if CONFIG.get("extract_dir"):
-        path = Path(CONFIG["extract_dir"]) / "enhanced_sections.md"
         if path.exists():
             return {"exists": True, "content": path.read_text(encoding="utf-8")}
     return {"exists": False, "content": ""}
@@ -774,8 +730,6 @@ def _build_plan_cmd() -> list[str] | tuple[None, str]:
     per-scene Narrate reuses those cached artifacts and skips
     Pass 1 / Pass 2 / Pass 3.
     """
-    if not _using_new_flow():
-        return None, "Plan & Check is only available in the new flow"
     summary = _session_summary_path()
     if summary is None or not summary.exists():
         return None, "session-summary.md not found — run Stage 1 first"
@@ -821,11 +775,7 @@ async def api_plan():
 
 @router.get("/raw/{n}")
 def api_raw(n: int):
-    if _using_new_flow():
-        path = _narration_file_for_scene(n)
-    else:
-        out_dir = CONFIG.get("output_dir")
-        path = (Path(out_dir) / f"scene{n}.md") if out_dir else None
+    path = _narration_file_for_scene(n)
     if path is None or not path.exists():
         return {"exists": False}
     text = path.read_text(encoding="utf-8")
@@ -852,13 +802,11 @@ def api_assemble():
     """Stage 4 — shell out to assemble.py."""
     nd = _narration_dir()
     if nd is None or not nd.is_dir():
-        # Fall back to the old in-process concat for legacy flows.
-        return _api_assemble_old()
+        return JSONResponse({"ok": False, "error": "narration_dir not configured"}, status_code=400)
 
     matches = sorted(nd.glob("session_doc_scene_*.md"))
     if not matches:
-        # Old-flow output_dir holds scene{N}.md instead — fall back.
-        return _api_assemble_old()
+        return JSONResponse({"ok": False, "error": "no narrated scenes found"}, status_code=400)
 
     out_path = _assembled_output_path()
     session_stem = Path(CONFIG["session"]).stem
@@ -884,67 +832,12 @@ def api_assemble():
     }
 
 
-def _api_assemble_old():
-    """Legacy in-process concat of scene{N}.md files."""
-    scenes = _load_scenes()
-    if not scenes:
-        return JSONResponse({"ok": False, "error": "no plan loaded"}, status_code=400)
-
-    out_dir = CONFIG.get("output_dir")
-    if not out_dir:
-        return JSONResponse({"ok": False, "error": "output_dir not configured"}, status_code=400)
-
-    parts = []
-    missing = []
-    for s in scenes:
-        p = Path(out_dir) / f"scene{s['index']}.md"
-        if p.exists():
-            parts.append(p.read_text(encoding="utf-8").strip())
-        else:
-            missing.append(s["index"])
-
-    if not parts:
-        return JSONResponse({"ok": False, "error": "no narrated scenes found"}, status_code=400)
-
-    session_name = Path(CONFIG["session"]).stem
-    title_line = f"# {session_name}"
-
-    def strip_header(text: str) -> str:
-        lines = text.split("\n")
-        while lines and lines[0].strip() in ("", "---", title_line):
-            lines.pop(0)
-        while lines and lines[-1].strip() in ("", "---"):
-            lines.pop()
-        return "\n".join(lines)
-
-    stripped = [strip_header(p) for p in parts]
-    content = f"{title_line}\n\n---\n\n" + "\n\n---\n\n".join(stripped) + "\n"
-
-    out_path = _assembled_output_path()
-    out_path.write_text(content, encoding="utf-8")
-
-    print(f"  Assembled {len(parts)} scenes → {out_path}")
-    if missing:
-        print(f"  Missing scenes (not yet narrated): {missing}")
-
-    return {
-        "ok": True,
-        "filename": out_path.name,
-        "scenes_included": len(parts),
-        "scenes_missing": missing,
-    }
-
-
 @router.post("/open/{file_type}/{n}")
 def api_open(file_type: str, n: int):
     if file_type == "extraction":
         path = _get_extraction_path(n)
     elif file_type == "output" or file_type == "narration":
-        if _using_new_flow():
-            path = _narration_file_for_scene(n)
-        else:
-            out_dir = CONFIG.get("output_dir")
-            path = (Path(out_dir) / f"scene{n}.md") if out_dir else None
+        path = _narration_file_for_scene(n)
     elif file_type == "summary":
         path = _session_summary_path()
     elif file_type == "assembled":

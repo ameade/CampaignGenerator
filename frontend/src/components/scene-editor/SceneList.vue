@@ -6,25 +6,18 @@ export interface Scene {
   focus: string
   has_extraction: boolean
   has_output: boolean
+  has_scrubbed?: boolean
   filename: string
   reviewed?: boolean
 }
 
-const props = defineProps<{
+defineProps<{
   scenes: Scene[]
   currentScene: number | null
-  /** Quote counts per scene index. */
-  quoteCounts?: Record<number, number>
-  /** Show Sync/Auto-Assign buttons (quotes mode). */
-  showQuoteActions?: boolean
-  syncing?: boolean
-  autoAssigning?: boolean
 }>()
 
 const emit = defineEmits<{
   select: [index: number]
-  sync: []
-  'auto-assign': []
 }>()
 </script>
 
@@ -34,7 +27,7 @@ const emit = defineEmits<{
     <div class="scene-list">
       <div v-if="scenes.length === 0" class="empty-msg">
         No plan yet.<br>
-        Click <b>Extract</b> in the header<br>
+        Click <b class="mauve">Extract</b> in the header<br>
         to run passes 1-4.
       </div>
       <div
@@ -46,25 +39,30 @@ const emit = defineEmits<{
       >
         <div class="num">Scene {{ s.index }}</div>
         <div class="narrator">{{ s.narrator }}</div>
-        <div class="sname">{{ s.scene || '\u2014' }}</div>
-        <div class="badges">
-          <span v-if="quoteCounts && quoteCounts[s.index] != null" class="badge b-quotes">
-            {{ quoteCounts[s.index] }} quotes
-          </span>
-          <span v-if="s.has_extraction" class="badge b-ext">Extracted</span>
-          <span v-if="s.reviewed" class="badge b-rev" title="Order reviewed">&#x2713; Reviewed</span>
-          <span v-if="s.has_output" class="badge b-nar">Narrated</span>
+        <div class="sname">{{ s.scene || '—' }}</div>
+        <div class="dots" :aria-label="`extract ${s.has_extraction ? 'done' : 'pending'}, review ${s.reviewed ? 'done' : 'pending'}, narrate ${s.has_output ? 'done' : 'pending'}, scrub ${s.has_scrubbed ? 'done' : 'pending'}`">
+          <span
+            class="dot"
+            :class="{ ok: s.has_extraction }"
+            title="Stage 2 — extraction file present"
+          >E</span>
+          <span
+            class="dot"
+            :class="{ ok: s.reviewed }"
+            title="Order reviewed by GM"
+          >R</span>
+          <span
+            class="dot"
+            :class="{ ok: s.has_output }"
+            title="Stage 4 — narration file present"
+          >N</span>
+          <span
+            class="dot"
+            :class="{ ok: s.has_scrubbed }"
+            title="Stage 4½ — .scrubbed.md sibling present"
+          >S</span>
         </div>
       </div>
-    </div>
-
-    <div v-if="showQuoteActions" class="scene-actions">
-      <button class="btn-neutral btn-sm action-btn" :disabled="syncing" @click="emit('sync')">
-        {{ syncing ? 'Syncing...' : 'Sync Quotes' }}
-      </button>
-      <button class="btn-primary btn-sm action-btn" :disabled="autoAssigning" @click="emit('auto-assign')">
-        {{ autoAssigning ? 'Assigning...' : 'Auto-Assign' }}
-      </button>
     </div>
   </div>
 </template>
@@ -116,27 +114,26 @@ const emit = defineEmits<{
   overflow: hidden;
   text-overflow: ellipsis;
 }
-.badges { display: flex; gap: 3px; margin-top: 3px; flex-wrap: wrap; }
-.badge {
-  font-size: 9px;
-  font-weight: 700;
-  padding: 1px 5px;
-  border-radius: 3px;
-  text-transform: uppercase;
-  letter-spacing: .05em;
-}
-.b-quotes { background: #2a1e3a; color: var(--mauve); }
-.b-ext { background: #1e3a5f; color: var(--blue); }
-.b-rev { background: #2a3a1e; color: #a6d189; }
-.b-nar { background: #1e3a2a; color: var(--green); }
 
-.scene-actions {
-  flex-shrink: 0;
-  padding: 8px 12px;
-  border-top: 1px solid var(--bg-surface0);
+.dots {
   display: flex;
-  flex-direction: column;
-  gap: 4px;
+  gap: 3px;
+  margin-top: 4px;
 }
-.action-btn { width: 100%; }
+.dot {
+  width: 14px;
+  height: 14px;
+  border-radius: 50%;
+  font-size: 8px;
+  font-weight: 700;
+  line-height: 14px;
+  text-align: center;
+  background: var(--bg-surface0);
+  color: var(--text-muted);
+  user-select: none;
+}
+.dot.ok {
+  background: var(--green, #a6d189);
+  color: #0e1018;
+}
 </style>

@@ -19,11 +19,6 @@ const routes = [
         component: () => import('./views/session/SessionConfig.vue'),
       },
       {
-        path: 'vtt',
-        name: 'vtt-summary',
-        component: () => import('./views/session/VttSummary.vue'),
-      },
-      {
         path: 'editor',
         name: 'editor',
         component: () => import('./views/session/SessionDocEditor.vue'),
