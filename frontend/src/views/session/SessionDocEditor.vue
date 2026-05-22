@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { ref, computed, onMounted, watch } from 'vue'
+import { useRouter } from 'vue-router'
 import { useConfigStore } from '../../stores/config'
 import { resolvePath, resolvePathList } from '../../utils/paths'
 import { apiFetch, apiPut, apiPost } from '../../api/client'
@@ -12,6 +13,7 @@ import VttPanel from '../../components/scene-editor/VttPanel.vue'
 import KnobDrawer from '../../components/scene-editor/KnobDrawer.vue'
 
 const config = useConfigStore()
+const router = useRouter()
 
 // ── Editor config (driven by the KnobDrawer) ──────────────────────
 const session = ref('')
@@ -529,27 +531,8 @@ async function openTypora(type: string) {
   }
 }
 
-async function assembleDoc() {
-  setStatus('Assembling session doc...')
-  try {
-    const data = await apiPost('/api/editor/assemble')
-    if (data.ok) {
-      setStatus(`Saved → ${data.filename} (${data.scenes_included} scenes)`)
-      assembledExists.value = true
-    } else {
-      setStatus(`Assembly failed: ${data.error}`)
-    }
-  } catch {
-    setStatus('Assembly error.')
-  }
-}
-
-async function openAssembled() {
-  try {
-    await apiPost('/api/editor/open/assembled/0')
-  } catch {
-    setStatus('Could not open assembled file.')
-  }
+function gotoReview() {
+  router.push('/workflow/editor/review')
 }
 
 function setStatus(msg: string) {
@@ -562,6 +545,8 @@ function clearOutput() {
 }
 
 async function checkAssembled() {
+  // Kept as a no-op stub so older code paths calling it don't break;
+  // the Review screen now handles assembled-state visibility.
   try {
     const data = await apiFetch('/api/editor/assembled-exists')
     assembledExists.value = data.exists
@@ -711,14 +696,12 @@ onMounted(async () => {
 
       <span class="stage-group">
         <span class="stage-label">Final</span>
-        <button class="btn-neutral btn-sm" :disabled="!configReady" @click="assembleDoc">
-          Assemble Doc
-        </button>
         <button
-          v-if="assembledExists"
-          class="btn-neutral btn-sm"
-          @click="openAssembled"
-        >Open in Typora</button>
+          class="btn-primary btn-sm"
+          :disabled="!configReady"
+          @click="gotoReview"
+          title="Review every scene's status, knobs, and preview before assembling the doc"
+        >Assemble →</button>
       </span>
 
       <button

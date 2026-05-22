@@ -1,126 +1,192 @@
 # Session Doc UI — Operator Flow
 
-The new flow that runs from the **Session Doc Editor** page in the web UI.
+The flow that runs from the **Session Doc Editor** page in the web UI.
 
 ---
 
 ## TL;DR — what to click in order
 
 1. Sidebar → `① Session Config` → set Campaign Dir + Session Dir → all paths auto-derive.
-2. Sidebar → `② Session Doc Editor` → `Open Editor`.
-3. Header `STAGE 1` → **`Enhance Summary`** → wait for `session-summary.md`.
-4. **Open `session-summary.md` in Typora and review/edit it** — this is the human checkpoint.
-5. Header `STAGE 2` → **`Re-Extract Quotes`** → produces `scene_extractions_new/NN_<slug>.md`.
-6. Header `STAGE 3` → **`Plan & Check`** → produces `narration/plan.md` + `enhanced_sections.md` + `consistency_report.md`. **Review the consistency report.**
-7. For each scene: select it on the left, in `Quotes` mode click **`Scaffold from Quotes`** to get a clean beat→quotes layout (`NN_<slug>.scaffold.md`).
-8. Switch the top-left mode toggle to **`Editor`**, click **`Narrate`** for each scene.
-9. Header `FINAL` → **`Assemble Doc`** → optionally run `polish.py`.
+2. Sidebar → `② Session Doc Editor`. The editor opens; if it's a cold start the **Config drawer** slides out automatically.
+3. (Drawer) Set at minimum the **GMassistant recap file** and the **Scene extractions dir** — the editor enables as soon as both are filled.
+4. Header → **`STAGE 1 — Enhance Summary`** → wait for `session-summary.md`.
+5. **Open `session-summary.md` in Typora and review/edit it** — this is the human checkpoint.
+6. Header → **`STAGE 2 — Re-Extract Quotes`** → produces `scene_extractions_new/NN_<slug>.md`.
+7. Header → **`STAGE 3 — Plan & Check`** → produces `narration/plan.md` + `enhanced_sections.md` + `consistency_report.md`. **Review the consistency report.**
+8. For each scene: select it on the left, edit the extraction, click **`Narrate`**, optionally **`Scrub`**, mark **Reviewed** when the order looks right. The four lifecycle dots on the scene card fill in (E · R · N · S).
+9. Header → **`Assemble →`** → opens the **Review** screen.
+10. On the Review screen: confirm every scene is narrated (any scene that isn't blocks Assemble). Click **`Assemble Doc`** → optionally **`Open in Typora`**.
 
 That's the full loop.
 
 ---
 
-## Sidebar layout
+## Page shape
 
 ```
-SESSION WORKFLOW
-  ① Session Config
-  ② Session Doc Editor
-
-GROUNDING DOCS
-  Campaign State / World State / Party Document / Planning Document
-
-PREP / SETUP / EXPERIMENTAL
-  …
-
-LEGACY
-  VTT Summary
-  Scene Extraction
+┌─ Header ───────────────────────────────────────────────────────────────────┐
+│ Session Doc  [Profile ▾]  ① ● 2h  ② ● 1h  ③ ● 5m  ④ ● 5/8         [Cfg ⚙] │
+│             [Batch] [Backend] [① Enhance] [② Re-Extract] [③ Plan & Check]  │
+│             [Scrub All] [Assemble →]                                       │
+├─ Three-column body ────────────────────────────────────────────────────────┤
+│ Scene list      │ Extraction editor + narration output      │ VTT panel    │
+│ • dot dot dot   │ ……                                         │ ……           │
+│ • dot dot dot   │                                             │              │
+└─────────────────┴─────────────────────────────────────────────┴──────────────┘
+                                                          [Config ⚙ drawer →]
 ```
 
-The two `LEGACY` pages are not part of the new flow — they exist only for sessions started under the old four-step pipeline.
+- **Profile picker** — names a preset of Stage-④ knobs. Switching profiles rewrites the drawer's Stage-④ section. A `*` next to the active profile name means the local knobs diverge from the saved values; the inline `Save` / `Revert` buttons appear.
+- **Pipeline strip** — read-only stage status (`ok` / `warn` / `cold`) with a human-friendly "ago" string. Refreshes after every stage run.
+- **Stage buttons** — the same stage actions as before, but now disabled until the editor is `configReady`.
+- **Config ⚙** — toggles the right-edge drawer (see below). State persists in `localStorage`.
 
-The wizard breadcrumb at the top of `/workflow/*` pages has 6 steps:
+If the editor isn't `configReady` (no session or no scene-extractions dir set yet), the three-column body is replaced by an empty-state card pointing the user back at the drawer.
 
+---
+
+## The Config drawer
+
+Right-edge slide-out (~360px). Replaces the old pre-flight config form. Every field auto-applies on change via a 350 ms debounced `PUT /api/editor/config`.
+
+Sections, top to bottom:
+
+| Section | Fields |
+|---|---|
+| **Paths** | GMassistant recap · Session summary · Scene extractions dir · Narration dir · Output dir · Party doc · Voice files dir · Examples dir · Characters · Context files |
+| **① Enhance** | Batch (Anthropic Message Batches API) · Backend (anthropic / dgx) |
+| **② Extract** | (no separate knobs — uses Batch + Backend; the Re-Extract button always forwards `--force`) |
+| **③ Plan & Check** | Reuse enhanced sections for downstream Narrate |
+| **④ Narrate** | Token limit · Prose mode · Reflections · Narration genre |
+| **⑤ Assemble** | (placeholder for a polish toggle once `polish.py` is wired) |
+
+Backend uses the existing `_TYPED_TO_CONFIG_KEY` mapping in `scene_editor.py`: typed `ui.session_doc.*` ↔ legacy `CONFIG[*]`. The path fields formerly under "Show overrides" (`extract_dir`, `roleplay_extract_dir`, `summary_extract_dir`) are gone from the UI — they're populated server-side by `derive_campaign_paths` and not part of the editor's PUT payload.
+
+The drawer opens automatically on cold start (when neither `session` nor `scene_extractions_dir` is set). A "Ready" pill at the top turns green once required fields are filled.
+
+---
+
+## Profiles
+
+A profile is a named set of Stage-④ knobs:
+
+```json
+{
+  "name": "Memoir mode",
+  "knobs": {
+    "narrate_tokens": 16000,
+    "prose_mode": true,
+    "reflections": true,
+    "use_enhanced_sections": true,
+    "narration_genre": "First-person comic-noir fantasy memoir",
+    "backend": "anthropic"
+  }
+}
 ```
-1 Session Config → 2 Editor Config → 3 Enhance Summary → 4 Extract Quotes → 5 Plan & Check → 6 Editor
-```
 
-Steps 2–6 all live on the same `/workflow/editor` page; the breadcrumb is a progress indicator using `?stage=` query params. Clicking a step changes the URL but doesn't change page contents (yet — see TODO).
+Stored in `ui_state.yaml` under `ui.profiles`. Two operations:
+
+- **Pick a profile** — rewrites the drawer's Stage-④ knobs. The editor's normal auto-apply watcher carries them through to the server.
+- **Save current as new** — appended via the same dropdown; the new profile becomes active.
+
+If you tweak a knob after picking a profile, the dropdown gains a `*` and a `Save` / `Revert` pair appears next to it. `Save` overwrites the profile's knobs with the current values; `Revert` re-applies the stored ones.
+
+Paths are deliberately **not** in profiles — they're per-session and don't belong in a preset that travels across sessions.
 
 ---
 
 ## The stages
 
-Header buttons on the Session Doc Editor page:
+### Stage 1 — Enhance Summary
 
-```
-STAGE 1 [Enhance Summary] | STAGE 2 [Re-Extract Quotes] | STAGE 3 [Plan & Check] | FINAL [Assemble Doc] [Open in Typora] [Config]
-```
+- **Input**: raw `.vtt` + `gm-assist.md`.
+- **Output**: `session-summary.md` in the session directory.
+- **Script**: `enhance_summary.py` (single LLM call, VTT cached as system prefix).
 
-### Stage 1 — Enhance Summary (global, one click)
+Stop after this. Open `session-summary.md` and read it. Edit by hand if anything is wrong. This is the only structural human checkpoint; everything downstream inherits from this file.
 
-- **Input**: raw `.vtt` transcript + `gm-assist.md` (the structured recap)
-- **Output**: `session-summary.md` in the session directory
-- **Script**: `enhance_summary.py` (single LLM call, VTT cached as system prefix)
-- **Why**: enrich the gm-assist recap with detail and verbatim quotes from the VTT, preserving the recap's section structure as the contract. Produces a *human-reviewable* document.
+### Stage 2 — Re-Extract Quotes
 
-**STOP after this. Open `session-summary.md` in Typora and read it. Edit it by hand if anything is wrong.** This is the only structural human checkpoint; everything downstream inherits from this file.
+- **Input**: reviewed `session-summary.md` + the raw VTT.
+- **Output**: per-scene quote files `NN_<slug>.md` in `scene_extractions_new/`.
+- **Script**: `scene_extract.py`.
 
-### Stage 2 — Re-Extract Quotes (global, one click)
+After this runs, the scene list on the editor's left column populates and each row gets its **E** lifecycle dot.
 
-- **Input**: reviewed `session-summary.md`
-- **Output**: per-scene quote files `NN_<slug>.md` in `scene_extractions_new/`
-- **Script**: `scene_extract.py`
-- **Why**: split the reviewed summary into per-scene files with frontmatter `source: gmassist`, beats from the gm-assist `## Scenes` section, and `## Verbatim moments` blocks pulling quotes from the VTT.
+### Stage 3 — Plan & Check
 
-After this runs, the scene list on the editor's left column populates.
+- **Input**: `session-summary.md` + per-scene Stage-2 files.
+- **Output** in `narration/`:
+  - `consistency_report.md` — Pass 1 flags contradictions / ambiguities.
+  - `enhanced_sections.md` — Pass 2 corrected event list per scene.
+  - `plan.md` — Pass 3 narrator assignments per scene.
+- **Script**: `session_doc.py --plan-only --no-plan-review`.
 
-### Stage 3 — Plan & Check (global, one click)
+Review `consistency_report.md` before narrating — it flags anything the model thinks is contradictory in the recap.
 
-- **Input**: `session-summary.md` + per-scene Stage-2 files
-- **Output**: in `narration/`:
-  - `consistency_report.md` (Pass 1 — flags contradictions / ambiguities)
-  - `enhanced_sections.md` (Pass 2 — corrected event list per scene)
-  - `plan.md` (Pass 3 — narrator assignments per scene)
-- **Script**: `session_doc.py --plan-only --no-plan-review`
-- **Why**: the heavy upstream passes that the per-scene Narrate would otherwise run lazily on the first scene. Doing them once up front means: (a) consistency issues surface before you spend tokens on narration, (b) every per-scene Narrate is fast because it reuses the cached artifacts.
+### Per-scene work
 
-**Review `consistency_report.md` before narrating** — it'll flag anything the model thinks is contradictory in the recap.
+For each scene:
 
-### Per-scene work — Scaffold + Narrate
+1. Click the scene in the left column. The center pane loads the Stage-2 file.
+2. Edit the extraction freely. Save.
+3. Click **Narrate** → produces `narration/session_doc_scene_NN_<slug>.md`. The **N** dot fills in.
+4. (Optional) **Scrub** → produces `*.scrubbed.md` sibling. The **S** dot fills in.
+5. Mark **Reviewed** when the order looks right. The **R** dot fills in.
 
-The scene editor has two modes (top-left toggle): **Quotes** (default) and **Editor**.
+The four lifecycle dots are green when complete, grey when cold. (Amber-when-the-input-is-newer-than-the-output rendering is not yet wired into the per-scene dots; the header pipeline strip conveys it globally.)
 
-#### In Quotes mode
+### Stage 4½ — Scrub All
 
-- Select a scene on the left.
-- Center pane shows the Stage-2 file's content + per-scene quote count.
-- Click **`Scaffold from Quotes`**: deterministic reformat of the Stage-2 file into beats followed by a "## Quotes to place" section. Output goes to `scene_extractions_new/NN_<slug>.scaffold.md` (sibling — **the Stage-2 file is never overwritten**, since it's the expensive LLM artifact).
-- Hand-curate: drag/move quotes under the beat where they belong, delete OOC lines.
+Header button. Runs `scrub_mechanics.py` against the whole `narration_dir`, producing a `*.scrubbed.md` sibling for every per-scene narration. Already-scrubbed files are skipped.
 
-#### Switch to Editor mode
+### Final — Review & Assemble
 
-- The center pane now shows whichever file Narrate will actually consume — the `.scaffold.md` if it exists, else the raw Stage-2 file.
-- Click **`Narrate`** for that scene.
-- Output: `narration/session_doc_scene_NN_<slug>.md`.
-- Repeat for every scene.
+The **Assemble →** button in the header navigates to `/workflow/editor/review`. It does not call `/api/editor/assemble` directly any more — every Assemble goes through the Review gate.
 
-### Final — Assemble + Polish
-
-- **`Assemble Doc`** stitches all `session_doc_scene_NN_*.md` into the final session document (uses `assemble.py`).
-- **`Open in Typora`** appears once an assembled doc exists.
-- Polish: run `polish.py` separately for the final cleanup pass.
+See the next section.
 
 ---
 
-## Why the human checkpoint between Stage 1 and Stage 2
+## The Review screen
 
-LLMs are renderers, not architects. Stage 1 is rendering (enrich a recap); Stage 2 is structure (split scenes, attach quotes). If Stage 2 runs on an unreviewed Stage 1 output, errors compound silently into the per-scene files and then the narration.
+Route: `/workflow/editor/review`. Three blocks plus a footer.
 
-`session-summary.md` is the cheap, human-verifiable artifact. Fixing scope mistakes here is a 5-minute edit; fixing them after Stage 2 means re-running both stages and burning tokens.
+### Pipeline readiness strip
 
-`consistency_report.md` (from Stage 3) is the second checkpoint — it surfaces contradictions before you commit to per-scene narration.
+The same four-stage strip the editor header shows, with verbose labels and timestamps. Green across is the "safe to assemble" signal.
+
+### Activity timeline (left)
+
+Tails `<session_dir>/.cg/activity.jsonl`. Every Enhance / Extract / Plan / Narrate / Scrub run appends one JSON line with timestamp, stage, scene (if applicable), returncode, the knobs in effect, and the output path(s). Newest first; failed rows highlight red.
+
+The file survives server restarts — the timeline is a real audit log, not in-memory state.
+
+### Per-scene roster (right)
+
+For every scene the Review screen shows:
+
+- The four lifecycle dots (`E R N S`).
+- Token estimate (extraction-based).
+- Applied-knobs chips — `prose`, `reflections`, `enh`, `anthropic` / `dgx`, `genre` — read from the per-narration `*.knobs.json` sidecar. If a scene was narrated with `prose_mode` on, it shows the `prose` chip; otherwise it doesn't.
+- First ~120 characters of the narration text (frontmatter stripped).
+
+A scene that hasn't been narrated yet gets a red border and a "Not narrated yet — Assemble is blocked" callout.
+
+### Footer
+
+A rollup line ("prose: 5/8 · reflections: 3/8 · enhanced: 8/8 · backends: anthropic=8 · genre: …") plus the **Assemble Doc** button. The button is disabled with a one-line reason ("blocked: scene 8 not narrated") if any scene is still cold.
+
+On success the button is replaced by an **Open in Typora** affordance.
+
+### Endpoints
+
+| Endpoint | What it returns |
+|---|---|
+| `GET /api/editor/pipeline-status` | `{enhance, extract, plan, narrate}` stage status (ok / warn / cold) with ago + counts |
+| `GET /api/editor/scene-roster` | `{scenes: [{index, narrator, scene, tokens, lifecycle, applied_knobs, preview}]}` |
+| `GET /api/editor/activity?limit=N` | `{entries: [...]}` from `activity.jsonl`, newest entries last |
+| `POST /api/editor/assemble` | Unchanged. Called from the Review footer, not from the editor header |
 
 ---
 
@@ -129,49 +195,26 @@ LLMs are renderers, not architects. Stage 1 is rendering (enrich a recap); Stage
 ```
 summaries/YYYYMMDD/
 ├── <session>.vtt                       # Zoom transcript
+├── <session>.cleaned.vtt               # /vtt-spell-pass output (optional)
 ├── gm-assist.md                        # GMassistant structured recap (Stage 1 input)
 ├── session-summary.md                  # Stage 1 output — REVIEW BEFORE STAGE 2
-├── scene_extractions_new/              # Stage 2 + scaffolds
-│   ├── 01_<slug>.md                    # Stage 2 source (rich, never overwritten)
-│   ├── 01_<slug>.scaffold.md           # Scaffold-from-Quotes output (the file you edit)
+├── scene_extractions_new/              # Stage 2
+│   ├── 01_<slug>.md                    # Stage 2 source — the file you edit
+│   ├── 01_<slug>.md.reviewed           # sidecar marker (R dot)
 │   ├── 02_<slug>.md
-│   ├── 02_<slug>.scaffold.md
 │   └── …
-├── narration/                          # Stage 3 + per-scene narration
+├── narration/                          # Stage 3 + Stage 4
 │   ├── consistency_report.md           # Pass 1 output (read this!)
 │   ├── enhanced_sections.md            # Pass 2 output (cached for Narrate)
 │   ├── plan.md                         # Pass 3 output (narrator assignments)
-│   ├── session_doc_scene_01_<slug>.md  # per-scene Narrate output
+│   ├── session_doc_scene_01_<slug>.md           # Stage 4 narration
+│   ├── session_doc_scene_01_<slug>.knobs.json   # which knobs were used (Review screen reads this)
+│   ├── session_doc_scene_01_<slug>.scrubbed.md  # Stage 4½ scrub output
 │   └── …
+├── .cg/
+│   └── activity.jsonl                  # append-only audit log (Review timeline)
 └── session_doc.md                      # Final assembled doc
 ```
-
-Legacy directories that may exist from old-flow sessions:
-- `scene_extractions/` (old per-scene files; used as fallback only when the new dir is empty — configurable under "Show overrides")
-- `vtt_extractions/`, `vtt_roleplay_extractions/` (reference panels in the editor's right column; not pipeline inputs in the new flow)
-
-### File precedence rules
-
-- **Editor / Narrate input for a scene**: prefers `NN_<slug>.scaffold.md`, falls back to `NN_<slug>.md`.
-- **`Scaffold from Quotes`**: reads the Stage-2 file (`NN_<slug>.md`) directly when it exists. Falls back to the legacy ledger + recap otherwise.
-- **`_using_new_flow()`** (backend): true when `narration/plan.md` exists OR any `scene_extractions_new/NN_*.md` has frontmatter `source: gmassist`.
-
----
-
-## Editor configuration
-
-Set once on the Session Doc Editor's config form (the pre-Apply screen). Required fields:
-
-| Field | Default | What it is |
-|---|---|---|
-| GMassistant recap file | `gm-assist.md` | Stage 1 input |
-| Session summary file | `session-summary.md` | Stage 1 output |
-| Scene extractions directory (Stage 2) | `scene_extractions_new` | Stage 2 output dir |
-| Narration directory (Stage 3) | `narration` | Stage 3 output dir |
-
-Behind **"Show overrides"**: legacy extractions dir, roleplay reference dirs, party/voice/examples paths, campaign context files.
-
-The form's `Open Editor` button POSTs all values to `/api/editor/config`, which seeds the running server's editor `CONFIG` dict. The backend's `_scene_extractions_dir()` and `_narration_dir()` helpers read from there, preferring the new keys and falling back to the legacy ones if unset.
 
 ---
 
@@ -187,37 +230,15 @@ The form's `Open Editor` button POSTs all values to `/api/editor/config`, which 
 
 ## Common gotchas
 
-**"I see the old `scene_extractions/` content even though I have files in `scene_extractions_new/`."** The server's editor CONFIG was seeded at startup before the new keys existed. Click `Config` in the editor header, then `Open Editor` again — that pushes the new field values into CONFIG. Verify with:
+**"I see the wrong `scene_extractions_*` directory."** Open the Config drawer (`Config ⚙` in the header) and change the **Scene extractions dir** field. The change auto-applies; no "Apply" button to click.
 
-```bash
-curl -s http://localhost:5000/api/editor/config \
-  | python3 -c "import sys,json; d=json.load(sys.stdin); print(d.get('scene_extractions_dir'))"
-```
+**"The Assemble button doesn't do anything."** Click `Assemble →` — it routes to the Review screen now. Assemble actually runs from there, and only when every scene is narrated.
 
-It should print the absolute path to `scene_extractions_new/`.
+**"My drawer keeps closing on reload."** Drawer state is in `localStorage` under `session-doc-editor.knob-drawer.open`. Clear it if you want to reset.
 
-**"Clicking Prose mode / Reflections on the config form jumps me into the editor."** Was a bug — the checkboxes had `@change="applyConfig"`. Fixed; if it recurs, hard-reload to drop a cached bundle.
-
-**"Scaffold from Quotes overwrote my Stage 2 file."** Shouldn't happen anymore — Scaffold writes to `NN_<slug>.scaffold.md` (sibling). If you see otherwise, the server is running old code; restart it.
-
-**"The page is blank in Chrome but works in Edge."** Chrome cache. Clear site data via DevTools → Application → Storage, or use Incognito. The hashed JS filenames mean rebuilds don't otherwise invalidate the entry HTML.
+**"The activity timeline is empty."** Activity is recorded into `<session_dir>/.cg/activity.jsonl` the first time a stage runs *after* the upgrade. Older runs (pre-rebuild) don't appear.
 
 **"`fastapi` not installed."** Install dependencies (see Required environment above).
-
----
-
-## TODO
-
-- [ ] Auto-advance the wizard breadcrumb (`?stage=...`) as the user moves through the pipeline. Today the breadcrumb is a manual progress indicator: clicking a step changes the query param, but running `Enhance Summary` / `Re-Extract Quotes` / `Plan & Check` / switching to Editor mode doesn't update it. `SessionDocEditor.vue` should `router.replace` the matching `?stage=` value when each Stage button is clicked and when `editorMode` flips to `editor`.
-
-- [ ] **Rip out legacy flows once all in-progress sessions have migrated.** The codebase still carries dead-weight paths kept around for backward compatibility:
-    - **Sidebar `LEGACY` group** — `VTT Summary`, `Scene Extraction` pages and their routes/components.
-    - **Backend** in `server/routers/scene_editor.py`: `_build_narrate_cmd_old`, `_build_extract_cmd_old`, `_api_assemble_old`, the `_using_new_flow()` branches, fallback to `extract_dir` in `_scene_extractions_dir()` / `_narration_dir()`.
-    - **Backend** in `server/routers/ledger.py`: the legacy ledger fallback branch in `_stream_generate_extraction` (everything below `# ── Legacy fallback`), plus `Sync Quotes`, `Auto-Assign`, `bulk-assign`, `make-exclusive` routes if no longer needed.
-    - **Frontend** in `SessionDocEditor.vue`: the `extractDir` / `roleplayExtractDir` / `summaryExtractDir` / `roleplaySummary` fields under "Show overrides".
-    - **Frontend** components: `QuoteLedger.vue`, `QuoteAssignmentPanel.vue`, `QuotePicker.vue`, `VttPanel.vue` if Quotes mode + right-side reference panels are no longer used.
-    - **`session_doc.py`** old extract paths (`--from-extractions`, `--by-scene`, `--roleplay-extract-dir`) — keep `--plan-only` / `--scene-extractions` / `--per-scene-output` and drop the rest.
-    - **Trigger condition**: only do this once every session in `summaries/*` has a `scene_extractions_new/` directory and no campaign still references the legacy dirs. Until then, keep the fallbacks so half-migrated sessions don't break.
 
 ---
 
@@ -227,9 +248,15 @@ It should print the absolute path to `scene_extractions_new/`.
 - `scene_extract.py` — Stage 2
 - `session_doc.py --plan-only` — Stage 3 (consistency + plan + enhanced sections)
 - `session_doc.py --scene N` — per-scene narration (uses cached plan + enhanced sections)
+- `scrub_mechanics.py` — Stage 4½ scrub
 - `assemble.py` — Final assembly
-- `polish.py` — Final polish pass
 
-The web server (`server/main.py`) wires these to UI buttons via routers in `server/routers/`, primarily `scene_editor.py` (extraction, plan, narrate) and `ledger.py` (Scaffold-from-Stage-2; legacy ledger sync/auto-assign).
+The web server (`server/main.py`) wires these to UI buttons via routers in `server/routers/`, primarily `scene_editor.py`. The `ledger.py` router that drove the old Quotes mode has been removed.
 
-For the older internal pass-by-pass design notes, see the "Design rationale" section of [`docs/cli/session_doc_pipeline.md`](../cli/session_doc_pipeline.md) (describes the 5-pass flow that `session_doc.py` still implements internally — what's new is exposing the planning passes as their own UI button instead of bundling them into the first per-scene Narrate).
+---
+
+## CHANGELOG (relative to the pre-rebuild flow)
+
+- **Removed**: Quotes mode, the `Editor` / `Quotes` toggle, `Scaffold from Quotes`, the `QuoteLedger` / `QuoteAssignmentPanel` / `QuotePicker` components, the `/api/ledger/*` routes, the `LEGACY` sidebar group, the `VttSummary` page, and the legacy `extract_dir` / `roleplay_extract_dir` / `summary_extract_dir` fields from the editor's PUT payload.
+- **Added**: KnobDrawer, Profiles (typed `ui.profiles` section), header pipeline-status strip with stage dots, per-scene lifecycle dots (E · R · N · S), `<session_dir>/.cg/activity.jsonl` recording, per-narration `*.knobs.json` sidecars, and the Review-before-Assemble screen at `/workflow/editor/review`.
+- **Still in flight**: `session_doc.py` still accepts the legacy CLI flags `--from-extractions` / `--by-scene` / `--roleplay-extract-dir`; the web UI no longer uses them but the script's internal code paths haven't been pruned yet.

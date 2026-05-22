@@ -15,9 +15,11 @@ feeds the VTT panel. It is NOT the deleted
 `session-roleplay.md` synthesised-summary chain.
 """
 
+import json
 import re
 import subprocess
 import sys
+from datetime import datetime, timezone
 from pathlib import Path
 
 from fastapi import APIRouter, Depends, Request
@@ -181,6 +183,73 @@ def _scrubbed_for_scene(n: int) -> bool:
     if narr is None:
         return False
     return narr.with_name(narr.stem + ".scrubbed.md").exists()
+
+
+def _activity_jsonl_path() -> Path | None:
+    """``<session_dir>/.cg/activity.jsonl`` — created on first write."""
+    sd = _session_dir()
+    if sd is None:
+        return None
+    return sd / ".cg" / "activity.jsonl"
+
+
+def _narrate_knobs_snapshot() -> dict:
+    """Capture the Stage-④ knobs at the moment a narration is produced.
+
+    Stashed alongside each narration file so the Review screen can show
+    "which flags were applied to this scene" without consulting the
+    activity log.
+    """
+    return {
+        "narrate_tokens": CONFIG.get("narrate_tokens"),
+        "prose_mode": bool(CONFIG.get("prose_mode")),
+        "reflections": bool(CONFIG.get("reflections")),
+        "use_enhanced_sections": bool(CONFIG.get("use_enhanced_sections", True)),
+        "narration_genre": CONFIG.get("narration_genre"),
+        "backend": CONFIG.get("backend") or "anthropic",
+    }
+
+
+def _record_activity(*, stage: str, rc: int | None,
+                     scene: int | None = None,
+                     knobs: dict | None = None,
+                     outputs: list[str] | None = None) -> None:
+    """Append one JSON line to ``<session_dir>/.cg/activity.jsonl``.
+
+    Best-effort: any failure is swallowed so a broken sidecar never
+    stops the SSE stream from completing.
+    """
+    try:
+        path = _activity_jsonl_path()
+        if path is None:
+            return
+        path.parent.mkdir(parents=True, exist_ok=True)
+        entry = {
+            "ts": datetime.now(timezone.utc).isoformat(),
+            "stage": stage,
+            "rc": rc,
+        }
+        if scene is not None:
+            entry["scene"] = scene
+        if knobs is not None:
+            entry["knobs"] = knobs
+        if outputs:
+            entry["outputs"] = outputs
+        with path.open("a", encoding="utf-8") as f:
+            f.write(json.dumps(entry) + "\n")
+    except Exception:
+        pass
+
+
+def _write_knobs_sidecar(narration_path: Path | None, knobs: dict) -> None:
+    """``session_doc_scene_NN_<slug>.knobs.json`` next to the narration."""
+    if narration_path is None:
+        return
+    try:
+        sidecar = narration_path.with_name(narration_path.stem + ".knobs.json")
+        sidecar.write_text(json.dumps(knobs, indent=2) + "\n", encoding="utf-8")
+    except Exception:
+        pass
 
 
 def _ago_string(ts: float) -> str:
@@ -761,8 +830,17 @@ async def api_enhance(batch: int = 0):
     if isinstance(result, tuple):
         _, err = result
         return JSONResponse({"ok": False, "error": err}, status_code=400)
+    summary = _session_summary_path()
+    outputs = [str(summary)] if summary else []
+
+    def _done(rc: int | None) -> None:
+        _record_activity(stage="enhance", rc=rc,
+                         knobs={"batch": bool(batch)},
+                         outputs=outputs)
+
     return StreamingResponse(
-        stream_subprocess(result, cwd=CONFIG.get("work_dir")),
+        stream_subprocess(result, cwd=CONFIG.get("work_dir"),
+                          on_complete=_done),
         media_type="text/event-stream",
         headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
     )
@@ -782,8 +860,17 @@ async def api_extract(batch: int = 0, force: int = 0):
     if isinstance(result, tuple):
         _, err = result
         return JSONResponse({"ok": False, "error": err}, status_code=400)
+    sx = _scene_extractions_dir()
+
+    def _done(rc: int | None) -> None:
+        outputs = [str(sx)] if sx else []
+        _record_activity(stage="extract", rc=rc,
+                         knobs={"batch": bool(batch), "force": bool(force)},
+                         outputs=outputs)
+
     return StreamingResponse(
-        stream_subprocess(result, cwd=CONFIG.get("work_dir")),
+        stream_subprocess(result, cwd=CONFIG.get("work_dir"),
+                          on_complete=_done),
         media_type="text/event-stream",
         headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
     )
@@ -795,9 +882,19 @@ async def api_narrate(n: int):
     if isinstance(result, tuple):
         _, err = result
         return JSONResponse({"ok": False, "error": err}, status_code=400)
+    knobs = _narrate_knobs_snapshot()
+
+    def _done(rc: int | None) -> None:
+        narr = _narration_file_for_scene(n)
+        if rc == 0:
+            _write_knobs_sidecar(narr, knobs)
+        outputs = [str(narr)] if narr else []
+        _record_activity(stage="narrate", rc=rc, scene=n,
+                         knobs=knobs, outputs=outputs)
+
     return StreamingResponse(
         stream_subprocess(result, cwd=CONFIG.get("work_dir"),
-                          env_extra=_llm_env()),
+                          env_extra=_llm_env(), on_complete=_done),
         media_type="text/event-stream",
         headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
     )
@@ -828,9 +925,15 @@ async def api_scrub(n: int):
     cmd = [python_exe(), str(SCRIPT_DIR / "scrub_mechanics.py"), str(path)]
     if CONFIG.get("scrub_tokens"):
         cmd += ["--max-tokens", str(CONFIG["scrub_tokens"])]
+
+    def _done(rc: int | None) -> None:
+        scrubbed = path.with_name(path.stem + ".scrubbed.md")
+        _record_activity(stage="scrub", rc=rc, scene=n,
+                         outputs=[str(scrubbed)])
+
     return StreamingResponse(
         stream_subprocess(cmd, cwd=CONFIG.get("work_dir"),
-                          env_extra=_llm_env()),
+                          env_extra=_llm_env(), on_complete=_done),
         media_type="text/event-stream",
         headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
     )
@@ -852,9 +955,13 @@ async def api_scrub_all():
     cmd = [python_exe(), str(SCRIPT_DIR / "scrub_mechanics.py"), str(nd)]
     if CONFIG.get("scrub_tokens"):
         cmd += ["--max-tokens", str(CONFIG["scrub_tokens"])]
+
+    def _done(rc: int | None) -> None:
+        _record_activity(stage="scrub_all", rc=rc, outputs=[str(nd)])
+
     return StreamingResponse(
         stream_subprocess(cmd, cwd=CONFIG.get("work_dir"),
-                          env_extra=_llm_env()),
+                          env_extra=_llm_env(), on_complete=_done),
         media_type="text/event-stream",
         headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
     )
@@ -904,11 +1011,126 @@ async def api_plan():
     if isinstance(result, tuple):
         _, err = result
         return JSONResponse({"ok": False, "error": err}, status_code=400)
+    nd = _narration_dir()
+
+    def _done(rc: int | None) -> None:
+        outputs: list[str] = []
+        if nd is not None:
+            for name in ("plan.md", "enhanced_sections.md"):
+                p = nd / name
+                if p.exists():
+                    outputs.append(str(p))
+        _record_activity(stage="plan", rc=rc, outputs=outputs)
+
     return StreamingResponse(
-        stream_subprocess(result, cwd=CONFIG.get("work_dir")),
+        stream_subprocess(result, cwd=CONFIG.get("work_dir"),
+                          on_complete=_done),
         media_type="text/event-stream",
         headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
     )
+
+
+# ── Activity log + scene roster (Review screen data sources) ────────────────
+
+
+def _read_knobs_sidecar(narration_path: Path | None) -> dict | None:
+    """Inverse of ``_write_knobs_sidecar``."""
+    if narration_path is None:
+        return None
+    sidecar = narration_path.with_name(narration_path.stem + ".knobs.json")
+    if not sidecar.exists():
+        return None
+    try:
+        return json.loads(sidecar.read_text(encoding="utf-8"))
+    except Exception:
+        return None
+
+
+def _narration_preview(narration_path: Path | None, *, max_chars: int = 120) -> str:
+    """First ~120 chars of narration prose (frontmatter stripped)."""
+    if narration_path is None or not narration_path.exists():
+        return ""
+    try:
+        text = narration_path.read_text(encoding="utf-8", errors="replace")
+    except Exception:
+        return ""
+    if text.startswith("---\n"):
+        end = text.find("\n---\n", 4)
+        if end != -1:
+            text = text[end + 5:]
+    text = text.strip()
+    if len(text) <= max_chars:
+        return text
+    return text[:max_chars].rstrip() + "…"
+
+
+@router.get("/activity")
+def api_activity(limit: int = 200):
+    """Return the most recent N rows from ``activity.jsonl``."""
+    path = _activity_jsonl_path()
+    if path is None or not path.exists():
+        return {"entries": []}
+    try:
+        lines = path.read_text(encoding="utf-8").splitlines()
+    except Exception:
+        return {"entries": []}
+    tail = lines[-max(0, limit):]
+    entries: list[dict] = []
+    for line in tail:
+        line = line.strip()
+        if not line:
+            continue
+        try:
+            entries.append(json.loads(line))
+        except Exception:
+            continue
+    return {"entries": entries}
+
+
+@router.get("/scene-roster")
+def api_scene_roster():
+    """Per-scene roster used by the Review-before-Assemble screen.
+
+    For each scene:
+      - lifecycle: {extract, reviewed, narrate, scrub}
+      - applied_knobs: from the ``*.knobs.json`` sidecar (or None)
+      - preview: first ~120 chars of narration prose, frontmatter stripped
+      - tokens: estimated narration tokens (extraction-based)
+    """
+    sys.path.insert(0, str(SCRIPT_DIR))
+    try:
+        from session_doc import estimate_narration_tokens  # type: ignore
+    except Exception:
+        estimate_narration_tokens = None  # type: ignore
+
+    scenes = _load_scenes()
+    roster: list[dict] = []
+    for s in scenes:
+        idx = s["index"]
+        narr_path = _narration_file_for_scene(idx)
+        ext_path = _scene_extraction_file_new(idx, s.get("scene", ""))
+        knobs = _read_knobs_sidecar(narr_path)
+        tokens: int | None = None
+        if ext_path and ext_path.exists() and estimate_narration_tokens is not None:
+            try:
+                tokens = estimate_narration_tokens(ext_path.read_text(encoding="utf-8"))
+            except Exception:
+                tokens = None
+        roster.append({
+            "index": idx,
+            "narrator": s.get("narrator", ""),
+            "scene": s.get("scene", ""),
+            "tokens": tokens,
+            "lifecycle": {
+                "extract": s.get("has_extraction", False),
+                "reviewed": s.get("reviewed", False),
+                "narrate": s.get("has_output", False),
+                "scrub": s.get("has_scrubbed", False),
+            },
+            "applied_knobs": knobs,
+            "preview": _narration_preview(narr_path),
+        })
+    return {"scenes": roster}
 
 
 @router.get("/raw/{n}")
