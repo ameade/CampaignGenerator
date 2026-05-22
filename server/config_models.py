@@ -109,12 +109,42 @@ class GroundingSection(BaseModel):
     summaries: OptStr = None
 
 
+class ProfileEntry(BaseModel):
+    """A named preset of Stage-④ Narrate knobs.
+
+    Paths are NOT part of a profile — they are per-session. Only the knobs
+    that change between runs (token budget, prose mode, reflections, the
+    enhanced-sections toggle, the genre directive, the backend choice) are
+    captured.
+    """
+
+    model_config = ConfigDict(extra="allow")
+
+    name: str
+    knobs: dict[str, Any] = Field(default_factory=dict)
+
+
+class ProfilesSection(BaseModel):
+    """``ui.profiles`` — named knob presets for the Session Doc Editor.
+
+    The active profile's knobs are mirrored into ``ui.session_doc`` at the
+    moment of activation, so the rest of the system keeps reading from the
+    flat overlay unchanged.
+    """
+
+    model_config = ConfigDict(extra="allow")
+
+    profiles: list[ProfileEntry] = Field(default_factory=list)
+    active: OptStr = None
+
+
 class UISection(BaseModel):
     """All per-page state, one attribute per page or group of pages."""
 
     session_doc: SessionDocSection = Field(default_factory=SessionDocSection)
     vtt_summary: VttSummarySection = Field(default_factory=VttSummarySection)
     grounding: GroundingSection = Field(default_factory=GroundingSection)
+    profiles: ProfilesSection = Field(default_factory=ProfilesSection)
     campaign_state: _LooseSection = Field(default_factory=_LooseSection)
     distill: _LooseSection = Field(default_factory=_LooseSection)
     party: _LooseSection = Field(default_factory=_LooseSection)

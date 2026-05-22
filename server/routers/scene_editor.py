@@ -183,6 +183,48 @@ def _scrubbed_for_scene(n: int) -> bool:
     return narr.with_name(narr.stem + ".scrubbed.md").exists()
 
 
+def _ago_string(ts: float) -> str:
+    """Human-friendly elapsed time. ts is a POSIX mtime."""
+    import time
+    delta = max(0.0, time.time() - ts)
+    if delta < 90:
+        return f"{int(delta)}s"
+    minutes = delta / 60
+    if minutes < 90:
+        return f"{int(minutes)}m"
+    hours = minutes / 60
+    if hours < 36:
+        return f"{int(hours)}h"
+    days = hours / 24
+    return f"{int(days)}d"
+
+
+def _stage_status(output: Path | None,
+                  inputs: list[Path],
+                  *,
+                  output_must_exist: bool = True) -> dict:
+    """Compare output mtime against input mtimes.
+
+    Returns ``{"status": ok|warn|cold, "ago": str|None, "mtime": float|None}``.
+    The ``bad`` state (last run failed) isn't tracked yet — we'd need to
+    record subprocess exit codes for that. Phase 3 wires it in.
+    """
+    if output is None or not output.exists():
+        return {"status": "cold", "ago": None, "mtime": None}
+    out_mtime = output.stat().st_mtime
+    in_mtimes = [p.stat().st_mtime for p in inputs if p.exists()]
+    status = "ok"
+    if in_mtimes and max(in_mtimes) > out_mtime:
+        status = "warn"
+    if not output_must_exist:
+        status = "ok"
+    return {
+        "status": status,
+        "ago": _ago_string(out_mtime),
+        "mtime": out_mtime,
+    }
+
+
 def _scene_extraction_file_new(n: int, scene_name: str) -> Path | None:
     """New-flow scene file. Prefer the cleaned scaffold
     (`NN_<slug>.scaffold.md`) when it exists; otherwise return the
@@ -480,6 +522,102 @@ def _llm_env() -> dict[str, str]:
 
 
 # ── Routes ──────────────────────────────────────────────────────────────────
+
+@router.get("/pipeline-status")
+def api_pipeline_status():
+    """Per-stage readiness based on output-vs-input mtimes.
+
+    Read-only; cheap (just a handful of file stats). The frontend
+    renders these as the header status strip.
+    """
+    summary = _session_summary_path()
+    vtt = _vtt_path()
+    gm = Path(CONFIG["session"]).expanduser() if CONFIG.get("session") else None
+    sx = _scene_extractions_dir()
+    nd = _narration_dir()
+
+    # ① Enhance: inputs are VTT + gm-assist; output is session-summary.md.
+    enhance_inputs: list[Path] = []
+    if vtt is not None:
+        enhance_inputs.append(vtt)
+    if gm is not None:
+        enhance_inputs.append(gm)
+    enhance_status = _stage_status(summary, enhance_inputs)
+
+    # ② Extract: inputs are VTT + session-summary; outputs are NN_*.md
+    # in scene_extractions_dir. We pick the OLDEST per-scene mtime so the
+    # stage is "stale" if ANY extraction is older than its inputs.
+    extract_status: dict
+    if sx is None or not sx.is_dir():
+        extract_status = {"status": "cold", "ago": None, "mtime": None}
+    else:
+        ext_files = [
+            f for f in sx.glob("[0-9][0-9]_*.md")
+            if not f.name.endswith(".scaffold.md")
+            and not f.name.endswith(".prev")
+            and not f.name.endswith(".reviewed")
+        ]
+        if not ext_files:
+            extract_status = {"status": "cold", "ago": None, "mtime": None}
+        else:
+            ext_mtimes = [f.stat().st_mtime for f in ext_files]
+            oldest_ext = min(ext_files, key=lambda f: f.stat().st_mtime)
+            extract_inputs = []
+            if vtt is not None:
+                extract_inputs.append(vtt)
+            if summary is not None:
+                extract_inputs.append(summary)
+            status = _stage_status(oldest_ext, extract_inputs)
+            status["count"] = len(ext_files)
+            status["newest_mtime"] = max(ext_mtimes)
+            extract_status = status
+
+    # ③ Plan: input is session-summary; output is narration_dir/plan.md.
+    plan_output = (nd / "plan.md") if nd else None
+    plan_status = _stage_status(plan_output,
+                                [summary] if summary else [])
+
+    # ④ Narrate: scene-level. count_done = how many narration files exist;
+    # count_total = number of scenes in the plan (or extraction count if
+    # no plan yet). Status is the "stalest" of all narrated scenes vs.
+    # their per-scene extraction mtimes.
+    scenes = _load_scenes()
+    count_total = len(scenes)
+    count_done = sum(1 for s in scenes if s.get("has_output"))
+    narrate_status: dict = {
+        "count_done": count_done,
+        "count_total": count_total,
+    }
+    if count_total == 0 or count_done == 0:
+        narrate_status.update({"status": "cold", "ago": None, "mtime": None})
+    else:
+        narr_files: list[Path] = []
+        any_stale = False
+        for s in scenes:
+            if not s.get("has_output"):
+                continue
+            narr = _narration_file_for_scene(s["index"])
+            if narr is None or not narr.exists():
+                continue
+            narr_files.append(narr)
+            ext_path = _scene_extraction_file_new(s["index"], s.get("scene", ""))
+            if ext_path and ext_path.exists():
+                if ext_path.stat().st_mtime > narr.stat().st_mtime:
+                    any_stale = True
+        newest = max(narr_files, key=lambda f: f.stat().st_mtime) if narr_files else None
+        narrate_status.update({
+            "status": "warn" if any_stale else "ok",
+            "ago": _ago_string(newest.stat().st_mtime) if newest else None,
+            "mtime": newest.stat().st_mtime if newest else None,
+        })
+
+    return {
+        "enhance": enhance_status,
+        "extract": extract_status,
+        "plan": plan_status,
+        "narrate": narrate_status,
+    }
+
 
 @router.get("/scenes")
 def api_scenes():

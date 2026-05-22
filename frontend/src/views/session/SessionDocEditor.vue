@@ -1,24 +1,19 @@
 <script setup lang="ts">
-import { ref, computed, onMounted } from 'vue'
+import { ref, computed, onMounted, watch } from 'vue'
 import { useConfigStore } from '../../stores/config'
 import { resolvePath, resolvePathList } from '../../utils/paths'
 import { apiFetch, apiPut, apiPost } from '../../api/client'
 import { connectSSE } from '../../api/sse'
-import PathField from '../../components/shared/PathField.vue'
-import MultiPathField from '../../components/shared/MultiPathField.vue'
 import SceneList from '../../components/scene-editor/SceneList.vue'
 import type { Scene } from '../../components/scene-editor/SceneList.vue'
 import ExtractionEditor from '../../components/scene-editor/ExtractionEditor.vue'
 import NarrationOutput from '../../components/scene-editor/NarrationOutput.vue'
 import VttPanel from '../../components/scene-editor/VttPanel.vue'
+import KnobDrawer from '../../components/scene-editor/KnobDrawer.vue'
 
 const config = useConfigStore()
 
-// ── Editor config ─────────────────────────────────────────────────
-const configured = ref(false)
-const configError = ref('')
-
-// Form fields for editor config
+// ── Editor config (driven by the KnobDrawer) ──────────────────────
 const session = ref('')
 const outputDir = ref('')
 const sessionSummary = ref('')
@@ -34,15 +29,17 @@ const proseMode = ref(false)
 const reflections = ref(false)
 const narrationGenre = ref('')
 const useEnhancedSections = ref(true)
-const showOverrides = ref(false)
-// Batch mode toggle for Stage 1 / Stage 2 (Anthropic Message Batches API,
-// 50% off list price; replaces token streaming with poll-progress lines).
 const useBatch = ref(false)
-// LLM backend selector — narrate + scrub honor this; Stage 1/2/Plan stay
-// on Anthropic regardless (their paths use tool-use which the OpenAI-
-// compat adapter doesn't support).
 const backend = ref<'anthropic' | 'dgx'>('anthropic')
 
+// Drawer open/closed — persisted in localStorage so it survives reloads.
+const DRAWER_KEY = 'session-doc-editor.knob-drawer.open'
+const drawerOpen = ref(localStorage.getItem(DRAWER_KEY) === 'true')
+watch(drawerOpen, (v) => {
+  localStorage.setItem(DRAWER_KEY, v ? 'true' : 'false')
+})
+
+// ── Field → config-store key map (legacy flat-key overlay) ───────
 function loadConfigFields() {
   const v = config.values
   session.value = v.sd_session || ''
@@ -64,38 +61,22 @@ function loadConfigFields() {
   backend.value = v.sd_backend === 'dgx' ? 'dgx' : 'anthropic'
 }
 
-async function persistBatchToggle() {
-  // Mirror into the legacy overlay so other views on the flat shape see
-  // the new value immediately, then persist via the typed section so it
-  // survives a restart.
-  config.values.sd_batch = useBatch.value
-  try {
-    await config.updateSection('session_doc', { batch: useBatch.value })
-  } catch {
-    /* non-fatal: toggle will still apply to in-flight calls */
-  }
-}
-
-async function setBackend(b: 'anthropic' | 'dgx') {
-  if (backend.value === b) return
-  backend.value = b
-  config.values.sd_backend = b
-  try {
-    await config.updateSection('session_doc', { backend: b })
-  } catch {
-    /* non-fatal — the next subprocess will still read the in-memory CONFIG */
-  }
-}
-
+// ── Auto-apply: debounce-PUT changes to /api/editor/config ───────
+//
+// The pre-flight config form is gone; every drawer field auto-saves on
+// change. We debounce so rapid typing in a path field doesn't fire a PUT
+// per keystroke. The PUT body is partial — only the fields included get
+// updated.
 const contextFiles = computed(() => resolvePathList(context.value))
-
 const configReady = computed(() =>
   !!(session.value.trim() && sceneExtractionsDir.value.trim())
 )
 
-async function applyConfig() {
-  configError.value = ''
-  const editorConfig = {
+let applyTimer: ReturnType<typeof setTimeout> | null = null
+let configHydrated = false
+
+function buildEditorConfigPayload() {
+  return {
     session: resolvePath(session.value),
     output_dir: resolvePath(outputDir.value) || config.cwd || '',
     session_summary: resolvePath(sessionSummary.value) || undefined,
@@ -113,16 +94,54 @@ async function applyConfig() {
     use_enhanced_sections: useEnhancedSections.value,
     work_dir: config.cwd,
   }
+}
+
+async function applyConfig() {
   try {
-    await apiPut('/api/editor/config', editorConfig)
-    configured.value = true
-    await loadScenes()
-    await checkAssembled()
-    await loadEnhancedSections()
+    await apiPut('/api/editor/config', buildEditorConfigPayload())
+    if (configReady.value) {
+      await loadScenes()
+      await checkAssembled()
+      await loadEnhancedSections()
+      await refreshPipeline()
+    }
   } catch (e: any) {
-    configError.value = `Failed to configure editor: ${e.message}`
+    setStatus(`Config save failed: ${e?.message ?? 'unknown error'}`)
   }
 }
+
+function scheduleApply() {
+  if (!configHydrated) return  // initial load — don't echo back to the server
+  if (applyTimer) clearTimeout(applyTimer)
+  applyTimer = setTimeout(applyConfig, 350)
+}
+
+watch(
+  [session, outputDir, sessionSummary, sceneExtractionsDir, narrationDir,
+   party, voiceDir, examplesDir, characters, context,
+   narrateTokens, proseMode, reflections, narrationGenre, useEnhancedSections],
+  scheduleApply,
+)
+
+async function persistBatchToggle() {
+  config.values.sd_batch = useBatch.value
+  try {
+    await config.updateSection('session_doc', { batch: useBatch.value })
+  } catch {
+    /* non-fatal: toggle will still apply to in-flight calls */
+  }
+}
+watch(useBatch, persistBatchToggle)
+
+async function persistBackend() {
+  config.values.sd_backend = backend.value
+  try {
+    await config.updateSection('session_doc', { backend: backend.value })
+  } catch {
+    /* non-fatal — the next subprocess will still read the in-memory CONFIG */
+  }
+}
+watch(backend, persistBackend)
 
 async function loadEnhancedSections() {
   const data = await apiFetch('/api/editor/enhanced-sections')
@@ -138,8 +157,6 @@ const sceneLabel = ref('')
 const estimatedTokens = ref<number | null>(null)
 const hasExtraction = ref(false)
 const narrating = ref(false)
-// One scrub at a time — covers both per-scene and Scrub-All; both buttons
-// disable while it's true.
 const scrubbing = ref(false)
 const extracting = ref(false)
 const enhancing = ref(false)
@@ -151,6 +168,151 @@ const hasEnhanced = ref(false)
 const assembledExists = ref(false)
 
 const activeSSE = ref<EventSource | null>(null)
+
+// ── Pipeline status (header strip) ────────────────────────────────
+interface StageStatus {
+  status: 'ok' | 'warn' | 'bad' | 'cold'
+  ago: string | null
+  mtime: number | null
+  count?: number
+  count_done?: number
+  count_total?: number
+}
+const pipeline = ref<{
+  enhance: StageStatus
+  extract: StageStatus
+  plan: StageStatus
+  narrate: StageStatus
+} | null>(null)
+
+async function refreshPipeline() {
+  if (!configReady.value) {
+    pipeline.value = null
+    return
+  }
+  try {
+    pipeline.value = await apiFetch('/api/editor/pipeline-status')
+  } catch {
+    pipeline.value = null
+  }
+}
+
+// ── Profiles (Stage-④ knob presets) ──────────────────────────────
+interface ProfileEntry {
+  name: string
+  knobs: {
+    narrate_tokens?: number
+    prose_mode?: boolean
+    reflections?: boolean
+    use_enhanced_sections?: boolean
+    narration_genre?: string
+    backend?: 'anthropic' | 'dgx'
+  }
+}
+const profiles = ref<ProfileEntry[]>([])
+const activeProfileName = ref<string | null>(null)
+
+function loadProfilesFromStore() {
+  const ps = config.resolved?.ui?.profiles
+  if (ps && typeof ps === 'object') {
+    profiles.value = Array.isArray(ps.profiles) ? ps.profiles : []
+    activeProfileName.value = ps.active ?? null
+  } else {
+    profiles.value = []
+    activeProfileName.value = null
+  }
+}
+
+const currentKnobs = computed(() => ({
+  narrate_tokens: narrateTokens.value,
+  prose_mode: proseMode.value,
+  reflections: reflections.value,
+  use_enhanced_sections: useEnhancedSections.value,
+  narration_genre: narrationGenre.value,
+  backend: backend.value,
+}))
+
+const activeProfile = computed(() =>
+  profiles.value.find(p => p.name === activeProfileName.value) ?? null,
+)
+
+const profileDirty = computed(() => {
+  const ap = activeProfile.value
+  if (!ap) return false
+  const c = currentKnobs.value
+  const k = ap.knobs
+  return (k.narrate_tokens ?? 16000) !== c.narrate_tokens
+    || !!k.prose_mode !== c.prose_mode
+    || !!k.reflections !== c.reflections
+    || (k.use_enhanced_sections ?? true) !== c.use_enhanced_sections
+    || (k.narration_genre ?? '') !== c.narration_genre
+    || (k.backend ?? 'anthropic') !== c.backend
+})
+
+async function persistProfilesSection() {
+  try {
+    await config.updateSection('profiles', {
+      profiles: profiles.value,
+      active: activeProfileName.value,
+    })
+    loadProfilesFromStore()
+  } catch (e: any) {
+    setStatus(`Profile save failed: ${e?.message ?? 'unknown error'}`)
+  }
+}
+
+function applyProfileKnobs(p: ProfileEntry) {
+  const k = p.knobs
+  if (typeof k.narrate_tokens === 'number') narrateTokens.value = k.narrate_tokens
+  if (typeof k.prose_mode === 'boolean') proseMode.value = k.prose_mode
+  if (typeof k.reflections === 'boolean') reflections.value = k.reflections
+  if (typeof k.use_enhanced_sections === 'boolean') useEnhancedSections.value = k.use_enhanced_sections
+  if (typeof k.narration_genre === 'string') narrationGenre.value = k.narration_genre
+  if (k.backend === 'anthropic' || k.backend === 'dgx') backend.value = k.backend
+}
+
+async function selectProfile(name: string) {
+  if (name === '__new__') {
+    const proposed = window.prompt('Profile name:')
+    if (!proposed) return
+    const trimmed = proposed.trim()
+    if (!trimmed) return
+    if (profiles.value.some(p => p.name === trimmed)) {
+      setStatus(`Profile "${trimmed}" already exists.`)
+      return
+    }
+    profiles.value = [...profiles.value, { name: trimmed, knobs: { ...currentKnobs.value } }]
+    activeProfileName.value = trimmed
+    await persistProfilesSection()
+    setStatus(`Saved profile "${trimmed}".`)
+    return
+  }
+  if (name === '') {
+    activeProfileName.value = null
+    await persistProfilesSection()
+    return
+  }
+  const p = profiles.value.find(prof => prof.name === name)
+  if (!p) return
+  activeProfileName.value = name
+  applyProfileKnobs(p)
+  await persistProfilesSection()
+}
+
+async function saveProfileChanges() {
+  if (!activeProfile.value) return
+  profiles.value = profiles.value.map(p =>
+    p.name === activeProfileName.value
+      ? { ...p, knobs: { ...currentKnobs.value } }
+      : p,
+  )
+  await persistProfilesSection()
+  setStatus(`Updated profile "${activeProfileName.value}".`)
+}
+
+function revertProfile() {
+  if (activeProfile.value) applyProfileKnobs(activeProfile.value)
+}
 
 // ── Scene navigation ─────────────────────────────────────────────
 
@@ -208,20 +370,18 @@ async function reload() {
 async function narrate() {
   if (currentScene.value === null || narrating.value) return
   await saveExtraction(extractionContent.value)
-
   narrating.value = true
   narrationOutput.value = ''
   setStatus('Running narration...')
 
   activeSSE.value = connectSSE(`/api/editor/narrate/${currentScene.value}`, {
-    onData(text) {
-      narrationOutput.value += text
-    },
+    onData(text) { narrationOutput.value += text },
     onDone(rc) {
       activeSSE.value = null
       narrating.value = false
       setStatus(rc === 0 ? 'Done.' : 'Narration failed.')
       loadScenes()
+      refreshPipeline()
     },
     onError() {
       activeSSE.value = null
@@ -238,9 +398,7 @@ async function scrubScene() {
   setStatus(`Scrubbing scene ${currentScene.value}...`)
 
   activeSSE.value = connectSSE(`/api/editor/scrub/${currentScene.value}`, {
-    onData(text) {
-      narrationOutput.value += text
-    },
+    onData(text) { narrationOutput.value += text },
     onDone(rc) {
       activeSSE.value = null
       scrubbing.value = false
@@ -248,6 +406,7 @@ async function scrubScene() {
         ? `Scrubbed scene ${currentScene.value} — .scrubbed.md written.`
         : 'Scrub failed.')
       loadScenes()
+      refreshPipeline()
     },
     onError() {
       activeSSE.value = null
@@ -264,9 +423,7 @@ async function scrubAll() {
   setStatus('Scrubbing all scene narrations...')
 
   activeSSE.value = connectSSE('/api/editor/scrub-all', {
-    onData(text) {
-      narrationOutput.value += text
-    },
+    onData(text) { narrationOutput.value += text },
     onDone(rc) {
       activeSSE.value = null
       scrubbing.value = false
@@ -274,6 +431,7 @@ async function scrubAll() {
         ? 'Scrub-All complete — .scrubbed.md files written.'
         : 'Scrub-All failed.')
       loadScenes()
+      refreshPipeline()
     },
     onError() {
       activeSSE.value = null
@@ -291,20 +449,17 @@ async function runExtract() {
     ? 'Submitting Stage 2 batch (Message Batches API)...'
     : 'Re-extracting quotes (Stage 2)...')
 
-  // force=1 — clicking Re-Extract always means "do the work" (overwrite
-  // existing files; backend snapshots prior content to .prev for diff view).
   const url = useBatch.value
     ? '/api/editor/extract?batch=1&force=1'
     : '/api/editor/extract?force=1'
   activeSSE.value = connectSSE(url, {
-    onData(text) {
-      narrationOutput.value += text
-    },
+    onData(text) { narrationOutput.value += text },
     onDone(rc) {
       activeSSE.value = null
       extracting.value = false
       setStatus(rc === 0 ? 'Re-extraction complete.' : 'Re-extraction failed.')
       loadScenes()
+      refreshPipeline()
     },
     onError() {
       activeSSE.value = null
@@ -321,9 +476,7 @@ async function runPlan() {
   setStatus('Planning & consistency check (Stage 3)...')
 
   activeSSE.value = connectSSE('/api/editor/plan', {
-    onData(text) {
-      narrationOutput.value += text
-    },
+    onData(text) { narrationOutput.value += text },
     onDone(rc) {
       activeSSE.value = null
       planning.value = false
@@ -332,6 +485,7 @@ async function runPlan() {
         : 'Plan & check failed.')
       loadScenes()
       loadEnhancedSections()
+      refreshPipeline()
     },
     onError() {
       activeSSE.value = null
@@ -351,13 +505,12 @@ async function runEnhance() {
 
   const url = useBatch.value ? '/api/editor/enhance?batch=1' : '/api/editor/enhance'
   activeSSE.value = connectSSE(url, {
-    onData(text) {
-      narrationOutput.value += text
-    },
+    onData(text) { narrationOutput.value += text },
     onDone(rc) {
       activeSSE.value = null
       enhancing.value = false
       setStatus(rc === 0 ? 'Stage 1 complete — review session-summary.md.' : 'Stage 1 failed.')
+      refreshPipeline()
     },
     onError() {
       activeSSE.value = null
@@ -415,188 +568,112 @@ async function checkAssembled() {
   } catch { /* ignore */ }
 }
 
-function backToConfig() {
-  configured.value = false
-}
-
 // ── Init ──────────────────────────────────────────────────────────
 onMounted(async () => {
+  // Hydrate form refs from the config store (legacy flat overlay), then
+  // mark `configHydrated` so the watcher below doesn't echo the initial
+  // values back to the server.
   loadConfigFields()
 
-  // Check if editor is already configured (e.g. from CLI startup)
   try {
     const existing = await apiFetch('/api/editor/config')
-    if (existing.session && existing.scene_extractions_dir) {
-      configured.value = true
-      await loadScenes()
-      await checkAssembled()
-      await loadEnhancedSections()
-      return
-    }
-  } catch { /* not configured yet */ }
+    if (existing.session) session.value = existing.session
+    if (existing.output_dir) outputDir.value = existing.output_dir
+    if (existing.session_summary) sessionSummary.value = existing.session_summary
+    if (existing.scene_extractions_dir) sceneExtractionsDir.value = existing.scene_extractions_dir
+    if (existing.narration_dir) narrationDir.value = existing.narration_dir
+    if (existing.party) party.value = existing.party
+    if (existing.voice_dir) voiceDir.value = existing.voice_dir
+    if (existing.examples) examplesDir.value = existing.examples
+    if (existing.characters) characters.value = existing.characters
+    if (typeof existing.narrate_tokens === 'number') narrateTokens.value = existing.narrate_tokens
+    if (typeof existing.prose_mode === 'boolean') proseMode.value = existing.prose_mode
+    if (typeof existing.reflections === 'boolean') reflections.value = existing.reflections
+    if (existing.narration_genre) narrationGenre.value = existing.narration_genre
+    if (typeof existing.use_enhanced_sections === 'boolean') useEnhancedSections.value = existing.use_enhanced_sections
+  } catch { /* server may not have CONFIG yet */ }
 
-  // Auto-apply if we have enough from the config store
+  configHydrated = true
+
+  loadProfilesFromStore()
+
   if (configReady.value) {
+    // Re-PUT once to make the server agree with our hydrated view, then
+    // load scenes / enhanced sections.
     await applyConfig()
+  } else {
+    // Cold start — pop the drawer so the user can fill in required fields.
+    drawerOpen.value = true
   }
 })
 </script>
 
 <template>
-  <!-- Config panel (shown when not yet configured) -->
-  <div v-if="!configured" class="config-panel">
-    <div class="page">
-      <div class="page-header">
-        <h2>Session Doc Editor</h2>
-        <p class="subtitle">
-          Configure the editor with your session files, then edit extractions and narrate scene by scene.
-        </p>
-      </div>
-
-      <div class="form-grid">
-        <!-- Required -->
-        <div class="form-section">
-          <PathField v-model="session" label="GMassistant recap file" required
-            help="The structured session notes (e.g. gm-assist.md). Stage 1 input." />
-          <PathField v-model="sessionSummary" label="Session summary file"
-            help="Stage 1 output (session-summary.md). Created/updated by the Enhance Summary button." />
-          <PathField v-model="sceneExtractionsDir" label="Scene extractions directory (Stage 2)"
-            help="Per-scene verbatim quote files (NN_<slug>.md). Created by Re-Extract Quotes." />
-          <PathField v-model="narrationDir" label="Narration directory (Stage 3)"
-            help="Per-scene narration output (session_doc_scene_NN_<slug>.md). Created by Narrate." />
-        </div>
-
-        <div class="form-section">
-          <PathField v-model="outputDir" label="Output directory"
-            help="Where sceneN.md files and the assembled doc are saved." />
-          <div class="field">
-            <label class="field-label">Characters</label>
-            <input type="text" class="field-input" v-model="characters"
-              placeholder="Zalthir, Grygum, Daz, Thorin" />
-            <div class="field-help">Comma-separated narrator roster (used by Extract)</div>
-          </div>
-          <div class="field">
-            <label class="field-label">Narration token limit</label>
-            <input type="number" class="field-input" v-model.number="narrateTokens"
-              min="1000" step="500" />
-            <div class="field-help">Per-scene output cap (default: 16000). Override per-scene with "tokens: N" in extraction file.</div>
-          </div>
-          <div class="field">
-            <label class="field-label checkbox-label">
-              <input type="checkbox" v-model="proseMode" />
-              Prose mode
-            </label>
-            <div class="field-help">Strip all mechanical language and GM framing. GM descriptions become the narrator's direct perception; dice rolls and HP become narrative consequence.</div>
-          </div>
-          <div class="field">
-            <label class="field-label">Narration genre</label>
-            <input type="text" class="field-input" v-model="narrationGenre"
-              placeholder='e.g. First-person comic-noir fantasy memoir — observational, dry, irony-forward' />
-            <div class="field-help">
-              One-line genre/register directive injected at the top of the Pass-5
-              narration prompt. Leave blank to use the default neutral prompt.
-            </div>
-          </div>
-          <div class="field">
-            <label class="field-label checkbox-label">
-              <input type="checkbox" v-model="useEnhancedSections" />
-              Use enhanced scene data
-            </label>
-            <div class="field-help">
-              When on, narration receives the corrected event list from
-              <code>enhanced_sections.md</code> (Pass 2 output) and campaign context files.
-              Turn off to narrate from the extraction file only — useful for comparing results.
-            </div>
-          </div>
-          <div class="field">
-            <label class="field-label checkbox-label">
-              <input type="checkbox" v-model="reflections" />
-              Reflections
-            </label>
-            <div class="field-help">
-              Inject campaign history (context files) into narration as memories and backstory references.
-              Useful when the scene calls for a character to reflect on past events or relationships.
-            </div>
-          </div>
-        </div>
-
-        <!-- Optional overrides -->
-        <div class="form-section">
-          <button class="btn-neutral btn-sm" @click="showOverrides = !showOverrides">
-            {{ showOverrides ? 'Hide' : 'Show' }} path overrides
-          </button>
-
-          <div v-if="showOverrides" class="advanced-panel">
-            <PathField v-model="party" label="Party document"
-              help="party.md — backstory, personality, relationships." />
-            <PathField v-model="voiceDir" label="Voice files directory"
-              help="Directory of {name}_voice.md files." />
-            <PathField v-model="examplesDir" label="Examples directory"
-              help="Handcrafted .md style references for narration." />
-            <MultiPathField v-model="context" label="Campaign context files"
-              help="campaign_state.md, world_state.md — used by extraction passes and injected into narration as campaign context." />
-          </div>
-        </div>
-
-        <div v-if="configError" class="error-box">{{ configError }}</div>
-
-        <div class="form-section">
-          <button
-            class="btn-primary"
-            :disabled="!configReady"
-            @click="applyConfig"
-          >
-            Open Editor
-          </button>
-          <span v-if="!configReady" class="field-help" style="margin-left:8px">
-            Fill in the required fields above.
-          </span>
-        </div>
-      </div>
-    </div>
-  </div>
-
-  <!-- Editor (shown after config is applied) -->
-  <div v-else class="session-editor">
+  <div class="session-editor">
     <!-- Header -->
     <header class="editor-global-header">
       <h1>Session Doc</h1>
 
-      <span class="status-msg">{{ statusMsg }}</span>
-
-      <span class="stage-group">
-        <label
-          class="batch-toggle"
-          title="Submit Stage 1 / Stage 2 via Anthropic's Message Batches API (50% off list price). Replaces token streaming with poll-progress lines; usually finishes in minutes (24h SLA worst case)."
+      <!-- Profile picker -->
+      <div class="profile-picker" :title="activeProfileName ? `Active profile: ${activeProfileName}` : 'No profile selected'">
+        <select
+          class="profile-select"
+          :value="activeProfileName ?? ''"
+          @change="selectProfile(($event.target as HTMLSelectElement).value)"
         >
-          <input
-            type="checkbox"
-            v-model="useBatch"
-            @change="persistBatchToggle"
-          />
-          Batch
-        </label>
-      </span>
+          <option value="">— no profile —</option>
+          <option v-for="p in profiles" :key="p.name" :value="p.name">
+            {{ p.name }}{{ activeProfileName === p.name && profileDirty ? ' *' : '' }}
+          </option>
+          <option value="__new__">＋ Save current as new…</option>
+        </select>
+        <button
+          v-if="activeProfile && profileDirty"
+          class="btn-sm profile-btn"
+          @click="saveProfileChanges"
+          title="Overwrite this profile with the current knob values"
+        >Save</button>
+        <button
+          v-if="activeProfile && profileDirty"
+          class="btn-sm profile-btn revert"
+          @click="revertProfile"
+          title="Discard local edits and re-apply the saved profile"
+        >Revert</button>
+      </div>
 
-      <span class="stage-group backend-group" title="Backend for Narrate + Scrub. Stage 1/2/3 always use Anthropic (tool-use paths).">
-        <span class="stage-label">Backend</span>
-        <button
-          class="btn-sm backend-btn"
-          :class="{ active: backend === 'anthropic' }"
-          @click="setBackend('anthropic')"
-        >Anthropic</button>
-        <button
-          class="btn-sm backend-btn"
-          :class="{ active: backend === 'dgx' }"
-          @click="setBackend('dgx')"
-        >DGX</button>
-      </span>
+      <!-- Pipeline-status strip (read-only) -->
+      <div v-if="pipeline" class="pipe-strip">
+        <span class="pipe-stage" :title="`Enhance · ${pipeline.enhance.ago ?? 'never'}`">
+          <span class="pipe-glyph">①</span>
+          <span class="pipe-dot" :class="pipeline.enhance.status"></span>
+          <span class="pipe-age">{{ pipeline.enhance.ago ?? '—' }}</span>
+        </span>
+        <span class="pipe-stage" :title="`Extract · ${pipeline.extract.ago ?? 'never'}`">
+          <span class="pipe-glyph">②</span>
+          <span class="pipe-dot" :class="pipeline.extract.status"></span>
+          <span class="pipe-age">{{ pipeline.extract.ago ?? '—' }}</span>
+        </span>
+        <span class="pipe-stage" :title="`Plan · ${pipeline.plan.ago ?? 'never'}`">
+          <span class="pipe-glyph">③</span>
+          <span class="pipe-dot" :class="pipeline.plan.status"></span>
+          <span class="pipe-age">{{ pipeline.plan.ago ?? '—' }}</span>
+        </span>
+        <span class="pipe-stage" :title="`Narrate · ${pipeline.narrate.count_done}/${pipeline.narrate.count_total}`">
+          <span class="pipe-glyph">④</span>
+          <span class="pipe-dot" :class="pipeline.narrate.status"></span>
+          <span class="pipe-age">
+            {{ pipeline.narrate.count_done ?? 0 }}/{{ pipeline.narrate.count_total ?? 0 }}
+          </span>
+        </span>
+      </div>
+
+      <span class="status-msg">{{ statusMsg }}</span>
 
       <span class="stage-group">
         <span class="stage-label">Stage 1</span>
         <button
           class="btn-neutral btn-sm"
-          :disabled="enhancing || extracting || narrating || planning"
+          :disabled="!configReady || enhancing || extracting || narrating || planning"
           @click="runEnhance"
           title="Stage 1 — rebuild session-summary.md from VTT + gm-assist.md"
         >{{ enhancing ? 'Enhancing…' : 'Enhance Summary' }}</button>
@@ -606,7 +683,7 @@ onMounted(async () => {
         <span class="stage-label">Stage 2</span>
         <button
           class="btn-neutral btn-sm"
-          :disabled="enhancing || extracting || narrating || planning"
+          :disabled="!configReady || enhancing || extracting || narrating || planning"
           @click="runExtract"
           title="Stage 2 — rebuild per-scene quote files from session-summary.md"
         >{{ extracting ? 'Re-extracting…' : 'Re-Extract Quotes' }}</button>
@@ -616,9 +693,9 @@ onMounted(async () => {
         <span class="stage-label">Stage 3</span>
         <button
           class="btn-neutral btn-sm"
-          :disabled="planning || enhancing || extracting || narrating"
+          :disabled="!configReady || planning || enhancing || extracting || narrating"
           @click="runPlan"
-          title="Stage 3 — consistency check + plan + enhanced sections (run once per session, cached for Narrate)"
+          title="Stage 3 — consistency check + plan + enhanced sections"
         >{{ planning ? 'Planning…' : 'Plan &amp; Check' }}</button>
       </span>
 
@@ -626,15 +703,15 @@ onMounted(async () => {
         <span class="stage-label">Stage 4½</span>
         <button
           class="btn-success btn-sm"
-          :disabled="scrubbing || narrating"
+          :disabled="!configReady || scrubbing || narrating"
           @click="scrubAll"
-          title="Run the second-pass mechanical scrub over every scene narration in narration_dir."
+          title="Run the second-pass mechanical scrub over every scene narration."
         >{{ scrubbing ? 'Scrubbing…' : 'Scrub All' }}</button>
       </span>
 
       <span class="stage-group">
         <span class="stage-label">Final</span>
-        <button class="btn-neutral btn-sm" @click="assembleDoc">
+        <button class="btn-neutral btn-sm" :disabled="!configReady" @click="assembleDoc">
           Assemble Doc
         </button>
         <button
@@ -646,20 +723,20 @@ onMounted(async () => {
 
       <button
         class="btn-neutral btn-sm config-btn"
-        @click="backToConfig"
-      >Config</button>
+        @click="drawerOpen = !drawerOpen"
+        :class="{ active: drawerOpen }"
+        title="Open config drawer"
+      >Config ⚙</button>
     </header>
 
     <!-- Three-column layout -->
-    <div class="columns">
-      <!-- Left: scene list -->
+    <div v-if="configReady" class="columns">
       <SceneList
         :scenes="scenes"
         :current-scene="currentScene"
         @select="selectScene"
       />
 
-      <!-- Center: extraction editor + narration output -->
       <div class="center-col">
         <ExtractionEditor
           :extraction-content="extractionContent"
@@ -683,8 +760,8 @@ onMounted(async () => {
           @scrub="scrubScene"
           @open-typora="openTypora"
           @update:extraction-content="extractionContent = $event"
-          @update:prose-mode="proseMode = $event; apiPut('/api/editor/config', { prose_mode: $event || undefined })"
-          @update:reflections="reflections = $event; apiPut('/api/editor/config', { reflections: $event || undefined })"
+          @update:prose-mode="proseMode = $event"
+          @update:reflections="reflections = $event"
           @update:use-enhanced-sections="useEnhancedSections = $event"
           @update:reviewed="setReviewed"
           @load-enhanced="loadEnhancedSections"
@@ -696,64 +773,45 @@ onMounted(async () => {
         />
       </div>
 
-      <!-- Right: VTT source -->
       <div class="right-panel">
         <VttPanel />
       </div>
     </div>
+
+    <!-- Empty state — drives the user to fill in the drawer -->
+    <div v-else class="empty-shell">
+      <div class="empty-card">
+        <h2>Set the session file to begin</h2>
+        <p>The editor needs at least a <strong>GMassistant recap</strong> and a
+        <strong>Scene extractions directory</strong>.</p>
+        <button class="btn-primary" @click="drawerOpen = true">Open Config</button>
+      </div>
+    </div>
+
+    <KnobDrawer
+      v-model:open="drawerOpen"
+      v-model:session="session"
+      v-model:session-summary="sessionSummary"
+      v-model:scene-extractions-dir="sceneExtractionsDir"
+      v-model:narration-dir="narrationDir"
+      v-model:output-dir="outputDir"
+      v-model:party="party"
+      v-model:voice-dir="voiceDir"
+      v-model:examples-dir="examplesDir"
+      v-model:characters="characters"
+      v-model:context="context"
+      v-model:use-batch="useBatch"
+      v-model:backend="backend"
+      v-model:narrate-tokens="narrateTokens"
+      v-model:prose-mode="proseMode"
+      v-model:reflections="reflections"
+      v-model:narration-genre="narrationGenre"
+      v-model:use-enhanced-sections="useEnhancedSections"
+    />
   </div>
 </template>
 
 <style scoped>
-/* Config panel styles */
-.config-panel {
-  height: 100%;
-  overflow-y: auto;
-}
-.checkbox-label {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  cursor: pointer;
-}
-.checkbox-label input { accent-color: var(--mauve); }
-.page { padding: 20px 24px; max-width: 700px; }
-.page-header { margin-bottom: 20px; }
-.page-header h2 { font-size: 16px; font-weight: 700; color: var(--text); margin-bottom: 4px; }
-.subtitle { font-size: 12px; color: var(--text-muted); }
-
-.form-grid { display: flex; flex-direction: column; gap: 16px; }
-.form-section {
-  padding-bottom: 12px;
-  border-bottom: 1px solid var(--bg-surface0);
-}
-.form-section:last-child { border-bottom: none; }
-
-.field { margin-bottom: 10px; }
-.field-label {
-  display: block; font-size: 11px; font-weight: 600;
-  color: var(--text-sub); margin-bottom: 3px;
-}
-.field-input {
-  width: 100%; padding: 6px 8px; border-radius: 4px;
-  border: 1px solid var(--bg-surface1); background: var(--bg-base);
-  color: var(--text); font-family: var(--mono); font-size: 11px;
-  outline: none; box-sizing: border-box;
-}
-.field-input:focus { border-color: var(--mauve); }
-.field-help { font-size: 10px; color: var(--text-muted); margin-top: 2px; }
-
-.advanced-panel {
-  margin-top: 10px; padding: 10px;
-  background: var(--bg-mantle); border-radius: 4px;
-}
-
-.error-box {
-  padding: 10px 14px; background: #3a1e1e; border-radius: 4px;
-  font-size: 11px; color: var(--red); line-height: 1.5;
-}
-
-/* Editor styles */
 .session-editor {
   height: 100%;
   display: flex;
@@ -782,6 +840,75 @@ onMounted(async () => {
   margin-left: auto;
 }
 
+.profile-picker {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
+.profile-select {
+  background: var(--bg-base);
+  color: var(--text-sub);
+  border: 1px solid var(--bg-surface1);
+  border-radius: 4px;
+  padding: 3px 6px;
+  font-size: 11px;
+  font-weight: 600;
+  cursor: pointer;
+  outline: none;
+}
+.profile-select:focus { border-color: var(--mauve); }
+.profile-btn {
+  background: var(--bg-surface0);
+  color: var(--mauve);
+  border: 1px solid var(--bg-surface1);
+  border-radius: 3px;
+  padding: 2px 8px;
+  font-size: 10px;
+  font-weight: 700;
+  cursor: pointer;
+}
+.profile-btn:hover { background: var(--bg-surface1); }
+.profile-btn.revert { color: var(--text-muted); }
+
+.pipe-strip {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  padding: 2px 8px;
+  border-left: 1px solid var(--bg-surface0);
+  border-right: 1px solid var(--bg-surface0);
+}
+.pipe-stage {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  padding: 1px 6px;
+  font-size: 10px;
+  color: var(--text-muted);
+}
+.pipe-glyph {
+  font-weight: 700;
+  color: var(--text-sub);
+  font-size: 11px;
+}
+.pipe-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--bg-surface1);
+  display: inline-block;
+}
+.pipe-dot.ok   { background: var(--green, #a6d189); }
+.pipe-dot.warn { background: var(--yellow, #e5c890); }
+.pipe-dot.bad  { background: var(--red, #e78284); }
+.pipe-dot.cold { background: var(--bg-surface1); }
+.pipe-age {
+  font-family: var(--mono);
+  font-size: 10px;
+  color: var(--text-muted);
+  min-width: 22px;
+}
+
 .stage-group {
   display: inline-flex;
   align-items: center;
@@ -803,35 +930,9 @@ onMounted(async () => {
 .config-btn {
   margin-left: 4px;
 }
-
-.batch-toggle {
-  display: inline-flex;
-  align-items: center;
-  gap: 4px;
-  font-size: 11px;
-  font-weight: 600;
-  color: var(--text-muted);
-  cursor: pointer;
-  user-select: none;
-}
-.batch-toggle input {
-  cursor: pointer;
-  margin: 0;
-}
-
-.backend-btn {
-  background: transparent;
-  border: 1px solid var(--bg-surface0);
-  color: var(--text-muted);
-  padding: 2px 8px;
-  font-size: 11px;
-  cursor: pointer;
-  border-radius: 3px;
-}
-.backend-btn.active {
-  background: var(--accent, #4a9eff);
-  color: white;
-  border-color: var(--accent, #4a9eff);
+.config-btn.active {
+  background: var(--bg-surface0);
+  color: var(--mauve);
 }
 
 .columns {
@@ -854,4 +955,34 @@ onMounted(async () => {
   flex-direction: column;
   overflow: hidden;
 }
+
+/* Empty-state shell shown when configReady is false */
+.empty-shell {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: var(--bg-base);
+}
+.empty-card {
+  max-width: 440px;
+  padding: 24px;
+  text-align: center;
+  background: var(--bg-mantle);
+  border: 1px solid var(--bg-surface0);
+  border-radius: 6px;
+}
+.empty-card h2 {
+  font-size: 14px;
+  font-weight: 700;
+  color: var(--text);
+  margin-bottom: 10px;
+}
+.empty-card p {
+  font-size: 12px;
+  color: var(--text-sub);
+  line-height: 1.5;
+  margin-bottom: 14px;
+}
+.empty-card strong { color: var(--mauve); }
 </style>
