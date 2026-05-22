@@ -5,7 +5,7 @@ import json
 import os
 import sys
 import time
-from collections.abc import AsyncGenerator
+from collections.abc import AsyncGenerator, Callable
 from datetime import datetime
 from pathlib import Path
 
@@ -51,6 +51,7 @@ async def stream_subprocess(
     cmd: list[str],
     cwd: str | None = None,
     env_extra: dict[str, str] | None = None,
+    on_complete: Callable[[int | None], None] | None = None,
 ) -> AsyncGenerator[str, None]:
     """Run a subprocess and yield Server-Sent Events as output arrives.
 
@@ -62,6 +63,11 @@ async def stream_subprocess(
     ``PYTHONUNBUFFERED``. Used to inject per-route LLM backend env
     (``DGX_ENDPOINT`` / ``DGX_MODEL``) without leaking it into routes that
     must stay on the default Anthropic path.
+
+    `on_complete`, if provided, fires once with the returncode after
+    ``proc.wait()`` returns but before the SSE ``done`` event is sent.
+    Exceptions are swallowed so a faulty hook can never break the stream.
+    Used by the editor routes to append a row to ``activity.jsonl``.
 
     On exit, writes a per-run log file under `<cwd>/logs/` capturing the
     command line, returncode, duration, and full output so failed runs can
@@ -103,6 +109,12 @@ async def stream_subprocess(
     await proc.wait()
     _save_run_log(cmd, cwd, "".join(captured), proc.returncode,
                   time.monotonic() - started)
+    if on_complete is not None:
+        try:
+            on_complete(proc.returncode)
+        except Exception:
+            # Activity recording is opportunistic — never break the stream.
+            pass
     yield f"event: done\ndata: {json.dumps({'returncode': proc.returncode})}\n\n"
 
 

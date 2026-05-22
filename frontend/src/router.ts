@@ -23,6 +23,11 @@ const routes = [
         name: 'editor',
         component: () => import('./views/session/SessionDocEditor.vue'),
       },
+      {
+        path: 'editor/review',
+        name: 'editor-review',
+        component: () => import('./views/session/ReviewAssemble.vue'),
+      },
     ],
   },
   {
