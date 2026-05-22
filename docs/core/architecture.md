@@ -7,7 +7,7 @@ System map for CampaignGenerator. Read this first when starting feature work; dr
 A D&D session-prep + post-session toolkit. It assembles markdown grounding docs and Zoom transcripts, calls the Claude API to generate prep beats, scene extractions, and narrative documents, and exposes the whole thing through a Vue/FastAPI web UI on top of a CLI library. Markdown files on disk are the source of truth; Claude is a renderer between human checkpoints.
 
 Hard rules — see [Critical rules](../../CLAUDE.md#critical-rules-apply-to-every-task):
-- All Claude API calls go through [`campaignlib.py`](../../campaignlib.py). Never `import anthropic` from a script.
+ - All Claude API calls go through [`campaignlib.py`](../../campaignlib.py). Direct `import anthropic` is used internally by `campaignlib.py` to create the client.
 - Render pipelines never consume raw retrieval output. They read a human-approved `docs/dossier_proposal.md`. Enforced by [`tests/test_retrieve_render_isolation.py`](../../tests/test_retrieve_render_isolation.py).
 - LLM extracts → human reviews → LLM renders. Scope/ordering/attribution decisions need a human checkpoint.
 
@@ -16,15 +16,15 @@ Hard rules — see [Critical rules](../../CLAUDE.md#critical-rules-apply-to-ever
 ```mermaid
 flowchart TB
     subgraph User["User entry points"]
-        CLI["CLI scripts (prep.py, session_doc.py, …)"]
-        Web["Web UI: ./startup → http://localhost:5000"]
+        CLI["CLI scripts (prep.py, session_doc.py, polish.py, …)"]
+        Web["Web UI (Vue 3, experimental routes: /api/experimental, /api/setup)"]
     end
 
     subgraph Server["FastAPI server (server/)"]
         Main["main.py — mounts /api/* + Vue dist"]
-        Routers["routers/* — one per domain"]
-        SubRun["subprocess_runner.py — SSE stream of CLI output"]
-        Cfg["config.py — derive_campaign_paths()"]
+        Routers["routers/* — one per domain (including /api/experimental, /api/setup, /api/editor)"]
+    SubRun["subprocess_runner.py — SSE stream of CLI output"]
+    Cfg["CampaignConfigService (config_service.py) — reads/writes config.yaml, ui_state.yaml, .campaigngenerator.local.yaml"]
     end
 
     subgraph Core["Core library"]
@@ -70,26 +70,26 @@ flowchart TB
 Two pipelines, one CLI/UI surface. Every arrow that crosses a HUMAN REVIEW box is a gating checkpoint — that's where the LLM has done a rendering pass and a human imposes structure before the next call (see the global "LLMs render, humans decide" rule in `~/.claude/CLAUDE.md`).
 
 ### Post-session pipeline
-
-```mermaid
+```
 flowchart LR
     VTT[("Zoom .vtt<br/>transcript")]
     GM[("gm-assist.md<br/>(human recap)")]
-
-    ES["Stage 1<br/><b>enhance_summary.py</b><br/>(supports --batch)"]
+    
+    ES["Stage 1<br/><b>enhance_summary.py</b><br/>(supports --batch, --collect)"]
     SS[("session-summary.md<br/>◄ HUMAN REVIEW")]
-
-    SE["Stage 2<br/><b>scene_extract.py</b><br/>(per-scene · cached VTT · --batch)"]
+    
+    SE["Stage 2<br/><b>scene_extract.py</b><br/>(per-scene · cached VTT · --batch, --collect)"]
     SX[("scene_extractions/NN_*.md<br/>◄ HUMAN REVIEW")]
-
+    
     SD["Stage 3<br/><b>session_doc.py --per-scene-output</b><br/>(5 passes via narrative.py)"]
     NARR[("narration/session_doc_scene_NN_*.md<br/>◄ HUMAN REVIEW")]
-
+    
     AS["Stage 4<br/><b>assemble.py</b>"]
     DOC[("session_doc.md")]
-
+    POL[("polish.py (optional experimental refinement)")]
+    
     QLED["quote_ledger.py<br/>(VTT quote → scene match,<br/>used by Web UI)"]
-
+    
     VTT --> ES
     GM  --> ES
     ES  --> SS
@@ -100,6 +100,7 @@ flowchart LR
     SD  --> NARR
     NARR --> AS
     AS  --> DOC
+    DOC --> POL
     SX  -.-> QLED
     VTT -.-> QLED
 ```
@@ -339,18 +340,18 @@ The campaign workspace is the database. All long-lived state is markdown.
 
 Typical session lifecycle:
 1. `vtt_summary.py` → `session-summary.md` + extractions
-2. `enhance_summary.py` → enriched gm-assist
-3. `scene_extract.py` → `scene_extractions/`
-4. `session_doc.py` → final narrative doc
+2. `enhance_summary.py` → enriched gm-assist (supports `--batch`, `--collect`)
+3. `scene_extract.py` → `scene_extractions/` (supports `--batch`, `--collect`)
+4. `session_doc.py` → final narrative doc (optional refinement via `polish.py`)
 5. Append summary to `summaries.md`
 6. `distill.py`, `campaign_state.py`, `planning.py`, `party.py` update grounding docs
-7. Next session: `prep.py` reads all four grounding docs
+7. Next session: `prep.py` reads all four grounding docs (including any polish feedback)
 
 ## MCP integration
 
 [`mcp_server.py`](../../mcp_server.py) is a FastMCP stdio server registered per campaign via `.mcp.json` ([template](../../.mcp.json.template)). Reads `CAMPAIGN_DIR` from env. Tools:
 
-- Read-only: `get_campaign_state`, `get_world_state`, `get_planning`, `get_mechanics`, `get_party`, `read_document`, `search_document`, `list_sessions`, `list_files`, `list_notes`
+    - Read-only: `get_campaign_state`, `get_world_state`, `get_planning`, `get_mechanics`, `get_party`, `read_document`, `search_document`, `list_sessions`, `list_files`, `list_notes`, `search_document_aliases`
 - Write: `write_note` (only into `<campaign_dir>/notes/`)
 - Semantic search: passes through to `mempalace.searcher.search_memories()` if MemPalace is installed
 
