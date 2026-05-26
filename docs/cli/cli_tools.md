@@ -272,10 +272,10 @@ Default model: `claude-sonnet-4-6`.
 
 ### session_doc.py
 
-Stage 3: per-scene first-person narration (5-pass internal pipeline). For
-the four-stage flow, run it with `--per-scene-output` to write one
-narration file per scene. For full pass-by-pass details, all flags, voice
-files, and the older single-shot mode, see
+Stage 3: per-scene first-person narration. Writes one narration file per
+scene under `--per-scene-output DIR`. Stage 4 (`assemble.py`) combines
+them into a single session document. For full pass details, all flags,
+and voice files, see
 [`docs/session_doc_pipeline.md`](session_doc_pipeline.md).
 
 ```bash

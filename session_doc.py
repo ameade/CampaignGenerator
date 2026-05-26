@@ -24,13 +24,16 @@ The final document: rotating-voice narrative sections, optionally followed by
 any pre-built `--enhanced-sections` block (Memorable Moments, Scenes, NPCs,
 Locations, Items, Spells, Consistency Notes).
 
+Writes one narration file per scene under `--per-scene-output DIR`. Use
+`assemble.py` (Stage 4) to combine them into a single session document.
+
 Usage:
   python session_doc.py session-mar \
       --scene-extractions vtt_scene_extractions/ \
       --context docs/campaign_state.md docs/world_state.md docs/party.md \
       --characters "Vukradin, Valphine, Soma, Brewbarry" \
       --examples examples/ \
-      --output session-doc.md
+      --per-scene-output narration/
 """
 
 import argparse
@@ -46,7 +49,6 @@ from campaignlib import (
     load_alias_map,
     load_file_optional,
     make_client,
-    save_log,
     stream_api,
 )
 
@@ -1282,16 +1284,13 @@ def main() -> None:
     )
     parser.add_argument("recap", metavar="FILE",
                         help="Existing session recap file (e.g. from gmassisstant.app)")
-    parser.add_argument("--output", "-o", default=None, metavar="FILE",
-                        help="Where to save the final assembled document. "
-                             "Required unless --per-scene-output is set.")
     parser.add_argument("--per-scene-output", default=None, metavar="DIR",
-                        help="Stage 3 mode: write one narration file per scene "
+                        help="Write one narration file per scene "
                              "(session_doc_scene_NN_<slug>.md, with YAML "
-                             "frontmatter) into this directory and skip the "
-                             "final-doc assembly. Use Stage 4 / assemble.py to "
-                             "combine the per-scene files later. Compatible with "
-                             "--scene N for re-narrating a single scene.")
+                             "frontmatter) into this directory. Run "
+                             "assemble.py (Stage 4) to combine the per-scene "
+                             "files into a single session document. Compatible "
+                             "with --scene N for re-narrating a single scene.")
     parser.add_argument("--summary-extract-dir", metavar="DIR",
                         help="vtt_extractions/ — action detail and event context")
     parser.add_argument("--session-summary", metavar="FILE",
@@ -1358,7 +1357,6 @@ def main() -> None:
                         help="Inject campaign_state and world_state context into the narration "
                              "prompt so the narrator can draw on past events as memories, "
                              "flashbacks, and reflections. Requires --context files.")
-    parser.add_argument("--no-log", action="store_true")
     parser.add_argument("--verbose", action="store_true",
                         help="Print the full system and user prompt before each API call")
     parser.add_argument("--model", default="claude-sonnet-4-6")
@@ -1406,8 +1404,8 @@ def main() -> None:
                              "and has been approved (status banner edited "
                              "away from `candidates only`).")
     args = parser.parse_args()
-    if args.output is None and args.per_scene_output is None and not args.plan_only and not args.extract_only:
-        parser.error("either --output or --per-scene-output must be set "
+    if args.per_scene_output is None and not args.plan_only and not args.extract_only:
+        parser.error("--per-scene-output is required "
                      "(or use --plan-only / --extract-only).")
     if args.fast:
         args.model = "claude-haiku-4-5-20251001"
@@ -1636,46 +1634,9 @@ def main() -> None:
         print("Review, then re-run with --plan-file <plan.md> to narrate.")
         return
 
-    if inputs.per_scene_output_dir is not None and args.output is None:
-        print(f"\nWrote {len(section_texts)} per-scene narration file(s) to: "
-              f"{inputs.per_scene_output_dir}")
-        print("Run assemble.py to combine them into a single session document.")
-        return
-
-    # ── Assemble final document ────────────────────────────────────────────────
-    doc_parts: list[str] = []
-
-    if single_narrator:
-        narrator, narration = section_texts[0]
-        doc_parts.append(f"## {narrator}\n\n{narration}")
-    else:
-        title = args.session_name or inputs.recap_path.stem
-        doc_parts.append(f"# {title}\n")
-        for narrator, narration in section_texts:
-            doc_parts.append(f"---\n\n## {narrator}\n\n{narration}")
-
-    full_doc = "\n\n".join(doc_parts) + "\n"
-
-    output = Path(args.output).expanduser().resolve()
-    output.parent.mkdir(parents=True, exist_ok=True)
-    output.write_text(full_doc, encoding="utf-8")
-    print(f"\nSession document saved to: {output}")
-
-    if not args.no_log:
-        if single_narrator:
-            log_sections = (
-                [("Narrative Plan", plan_text)] +
-                [(f"Section — {n}", t) for n, t in section_texts]
-            )
-        else:
-            log_sections = (
-                [("Consistency Report", consistency_report or "(skipped)"),
-                 ("Structured Sections", inputs.enhanced_sections),
-                 ("Narrative Plan", plan_text)] +
-                [(f"Section — {n}", t) for n, t in section_texts]
-            )
-        log_file = save_log(str(output.parent / "logs"), log_sections, stem="session_doc")
-        print(f"Log saved to: {log_file}")
+    print(f"\nWrote {len(section_texts)} per-scene narration file(s) to: "
+          f"{inputs.per_scene_output_dir}")
+    print("Run assemble.py to combine them into a single session document.")
 
 
 if __name__ == "__main__":

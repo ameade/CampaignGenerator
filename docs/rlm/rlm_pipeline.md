@@ -53,7 +53,7 @@ python dossier_proposer.py "party arrives at Icespire Hold"
 
 # 3. Render pipelines consume it:
 python prep.py --campaign-dir . --require-proposal --beat "The party enters Icespire Hold"
-python session_doc.py recap.md --output session-doc.md --campaign-dir . --require-proposal …
+python session_doc.py recap.md --scene-extractions scene_extractions/ --per-scene-output narration/ --campaign-dir . --require-proposal …
 python planning.py --npc docs/npcs/*.md --output docs/planning.md --campaign-dir . --require-proposal
 ```
 
