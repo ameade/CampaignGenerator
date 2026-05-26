@@ -262,17 +262,18 @@ def test_extract_scene_text_no_scenes_section():
     assert text == ""
 
 
-# ── session_doc --plan-only persists plan.md ─────────────────────────────────
+# ── sd_plan.main writes plan.md ───────────────────────────────────────────────
 
-def test_plan_only_writes_plan_md_to_per_scene_output(tmp_path, monkeypatch):
-    """--plan-only must persist plan.md so per-scene Narrate can reuse it.
+def test_sd_plan_writes_plan_md(tmp_path, monkeypatch):
+    """sd_plan.py is the post-Phase-5 successor to --plan-only: it must
+    persist plan.md so per-scene Narrate can reuse it.
 
-    Regression: the save block sat after `if args.plan_only: return`, so
-    Plan & Check produced narrators+focus in memory but never wrote them
-    to disk — per-scene Narrate then re-ran Pass 3 from scratch.
+    Regression on the old code: the save block once sat after
+    `if args.plan_only: return`, so Plan & Check produced narrators+focus
+    in memory but never wrote them to disk — per-scene Narrate then
+    re-ran Pass 3 from scratch. The new sd_plan.py always writes.
     """
-    summary = tmp_path / "session-summary.md"
-    summary.write_text("## Summary\n\nThe party climbed.\n", encoding="utf-8")
+    import sd_plan
 
     sx_dir = tmp_path / "scene_extractions"
     sx_dir.mkdir()
@@ -285,8 +286,7 @@ def test_plan_only_writes_plan_md_to_per_scene_output(tmp_path, monkeypatch):
         encoding="utf-8",
     )
 
-    nd = tmp_path / "narration_dir"
-    nd.mkdir()
+    out_path = tmp_path / "plan.md"
 
     fake_plan = (
         "## Section 1\n"
@@ -301,28 +301,23 @@ def test_plan_only_writes_plan_md_to_per_scene_output(tmp_path, monkeypatch):
         "focus: scouting the route ahead\n"
     )
 
-    monkeypatch.setattr(session_doc, "make_client", lambda **_: object())
-    monkeypatch.setattr(
-        session_doc, "stream_api",
-        lambda *a, **kw: fake_plan,
-    )
+    monkeypatch.setattr(sd_plan, "make_client", lambda **_: object())
+    monkeypatch.setattr(sd_plan, "stream_api", lambda *a, **kw: fake_plan)
 
     monkeypatch.setattr(
         sys, "argv",
         [
-            "session_doc.py", str(summary),
+            "sd_plan.py",
             "--scene-extractions", str(sx_dir),
-            "--per-scene-output", str(nd),
-            "--plan-only",
-            "--no-plan-review",
+            "--characters", "Vukradin, Soma",
+            "--out", str(out_path),
         ],
     )
 
-    session_doc.main()
+    sd_plan.main()
 
-    plan_path = nd / "plan.md"
-    assert plan_path.exists(), "plan.md must be written under --plan-only"
-    plan_text = plan_path.read_text(encoding="utf-8")
+    assert out_path.exists(), "plan.md must be written"
+    plan_text = out_path.read_text(encoding="utf-8")
     assert "narrator: Vukradin" in plan_text
     assert "narrator: Soma" in plan_text
     assert "focus: holding the line against the giants" in plan_text

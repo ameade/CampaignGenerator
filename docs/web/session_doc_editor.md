@@ -118,9 +118,8 @@ After this runs, the scene list on the editor's left column populates and each r
 - **Input**: `session-summary.md` + per-scene Stage-2 files.
 - **Output** in `narration/`:
   - `consistency_report.md` — Pass 1 flags contradictions / ambiguities.
-  - `enhanced_sections.md` — Pass 2 corrected event list per scene.
   - `plan.md` — Pass 3 narrator assignments per scene.
-- **Script**: `session_doc.py --plan-only --no-plan-review`.
+- **Scripts**: `sd_consistency.py` (if `--context` configured) followed by `sd_plan.py`. The editor chains them into one streaming response.
 
 Review `consistency_report.md` before narrating — it flags anything the model thinks is contradictory in the recap.
 
@@ -246,8 +245,8 @@ summaries/YYYYMMDD/
 
 - `enhance_summary.py` — Stage 1
 - `scene_extract.py` — Stage 2
-- `session_doc.py --plan-only` — Stage 3 (consistency + plan + enhanced sections)
-- `session_doc.py --scene N` — per-scene narration (uses cached plan + enhanced sections)
+- `sd_consistency.py` + `sd_plan.py` — Stage 3 plan & check (chained when `--context` is configured)
+- `sd_narrate.py --scene N` — per-scene narration (reads cached `plan.md`)
 - `scrub_mechanics.py` — Stage 4½ scrub
 - `assemble.py` — Final assembly
 
@@ -259,4 +258,4 @@ The web server (`server/main.py`) wires these to UI buttons via routers in `serv
 
 - **Removed**: Quotes mode, the `Editor` / `Quotes` toggle, `Scaffold from Quotes`, the `QuoteLedger` / `QuoteAssignmentPanel` / `QuotePicker` components, the `/api/ledger/*` routes, the `LEGACY` sidebar group, the `VttSummary` page, and the legacy `extract_dir` / `roleplay_extract_dir` / `summary_extract_dir` fields from the editor's PUT payload.
 - **Added**: KnobDrawer, Profiles (typed `ui.profiles` section), header pipeline-status strip with stage dots, per-scene lifecycle dots (E · R · N · S), `<session_dir>/.cg/activity.jsonl` recording, per-narration `*.knobs.json` sidecars, and the Review-before-Assemble screen at `/workflow/editor/review`.
-- **Still in flight**: `session_doc.py` still accepts the legacy CLI flags `--from-extractions` / `--by-scene` / `--roleplay-extract-dir`; the web UI no longer uses them but the script's internal code paths haven't been pruned yet.
+- **Phase 5 of SessionDocRefactor (this PR):** `session_doc.py` has been deleted. The three live LLM passes now live in `sd_consistency.py` / `sd_plan.py` / `sd_narrate.py`. The shared helpers are under the `session_doc/` package. Legacy CLI flags (`--from-extractions`, `--by-scene`, `--roleplay-extract-dir`, `--plan-only`, `--extract-only`) are all gone — invoking the right tool replaces the flag.

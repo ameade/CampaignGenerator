@@ -24,19 +24,19 @@ from campaignlib import (
     make_client,
     stream_api,
 )
-from session_doc_examples import get_char_examples
-from session_doc_io import (
+from session_doc.examples import get_char_examples
+from session_doc.io import (
     extract_scene_text,
     load_scene_extractions,
     parse_plan,
 )
-from session_doc_narrate import (
+from session_doc.narrate import (
     build_narrate_prompt,
     build_narrate_system,
     estimate_narration_tokens,
 )
-from session_doc_roster import extract_character_roster
-from session_doc_voice import (
+from session_doc.roster import extract_character_roster
+from session_doc.voice import (
     extract_contrast_sample,
     get_voice_note,
     load_voice_files,

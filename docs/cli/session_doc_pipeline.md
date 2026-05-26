@@ -1,4 +1,6 @@
-# session_doc.py — narration pipeline
+# Post-session narration pipeline
+
+(`sd_consistency.py` + `sd_plan.py` + `sd_narrate.py` — the Phase-5 split of the old `session_doc.py` monolith.)
 
 Generates per-scene first-person narration from a session recap, the human-verified `scene_extractions/` directory (Stage 2 output), per-character voice files, and optional style examples. Writes one file per scene; `assemble.py` (Stage 4) combines them.
 
@@ -13,7 +15,7 @@ session-summary.md  ◄── HUMAN REVIEW (edit freely)
     ▼  Stage 2 — scene_extract.py --summary
 scene_extractions/NN_<slug>.md  ◄── HUMAN REVIEW
     │
-    ▼  Stage 3 — session_doc.py --per-scene-output     ← this script
+    ▼  Stage 3 — sd_consistency.py + sd_plan.py + sd_narrate.py  ← these scripts
 narration/session_doc_scene_NN_<slug>.md  ◄── HUMAN REVIEW
     │
     ▼  Stage 4 — assemble.py
@@ -24,7 +26,7 @@ The "LLM extracts → human reviews and imposes structure → LLM renders inside
 
 ## Passes
 
-Inside session_doc.py:
+Inside the three sd_*.py tools:
 
 | Pass | Status | System prompt | Purpose |
 |---|---|---|---|
@@ -42,9 +44,23 @@ Pass 5 user-prompt assembly order (in `build_narrate_prompt()`): narrator + focu
 SESS=summaries/20260414
 
 # Full Stage 3 run
-python session_doc.py "$SESS/session-summary.md" \
+# Pass 1 — consistency check (writes consistency_report.md)
+python sd_consistency.py "$SESS/session-summary.md" \
+    --context docs/campaign_state.md docs/world_state.md docs/party.md \
+    --out     "$SESS/narration/consistency_report.md"
+
+# Pass 3 — narrative plan (writes plan.md)
+python sd_plan.py \
     --scene-extractions "$SESS/scene_extractions/" \
-    --context           docs/campaign_state.md docs/world_state.md docs/party.md \
+    --characters        "Vukradin, Valphine, Soma, Brewbarry" \
+    --party             docs/party.md \
+    --session-summary   "$SESS/session-summary.md" \
+    --out               "$SESS/narration/plan.md"
+
+# Pass 5 — per-scene narration (one file per scene)
+python sd_narrate.py "$SESS/session-summary.md" \
+    --plan              "$SESS/narration/plan.md" \
+    --scene-extractions "$SESS/scene_extractions/" \
     --party             docs/party.md \
     --characters        "Vukradin, Valphine, Soma, Brewbarry" \
     --voice-dir         voice/ \
@@ -53,20 +69,22 @@ python session_doc.py "$SESS/session-summary.md" \
 # REVIEW & EDIT narration/session_doc_scene_NN_*.md (one narrator per file).
 
 # Re-narrate a single scene after editing its quote file
-python session_doc.py "$SESS/session-summary.md" \
+python sd_narrate.py "$SESS/session-summary.md" \
+    --plan              "$SESS/narration/plan.md" \
     --scene-extractions "$SESS/scene_extractions/" \
     --per-scene-output  "$SESS/narration/" \
-    --plan-file         "$SESS/narration/plan.md" \
     --scene 3
 
 # Inspect the plan only (no narration)
-python session_doc.py "$SESS/session-summary.md" \
+python sd_plan.py \
     --scene-extractions "$SESS/scene_extractions/" \
-    --extract-dir       "$SESS/narration/" \
-    --plan-only
+    --characters        "Vukradin, Valphine, Soma, Brewbarry" \
+    --party             docs/party.md \
+    --out               "$SESS/narration/plan.md"
 
 # Single character (filters the plan to one narrator; still per-scene output)
-python session_doc.py "$SESS/session-summary.md" \
+python sd_narrate.py "$SESS/session-summary.md" \
+    --plan              "$SESS/narration/plan.md" \
     --scene-extractions "$SESS/scene_extractions/" \
     --per-scene-output  "$SESS/narration/" \
     --narrator Brewbarry
@@ -83,7 +101,7 @@ python assemble.py "$SESS/narration/" \
 ## What "review" means at the Stage 2 / scene-extraction checkpoint
 
 Each `scene_extractions/NN_<slug>.md` has two sections, parsed by
-`_split_scene_body` in `session_doc.py`:
+`_split_scene_body` in `session_doc/io.py`:
 
 1. `## Scene summary (from gm-assist, verbatim)` — the structural skeleton
    for Pass 5.
@@ -212,10 +230,10 @@ For single-scene re-runs (`--scene N`), the handoff is empty; the contrast signa
 
 The VTT contains verbatim roleplay quotes that are higher fidelity than what the LLM summary alone produces. These need to be matched to scenes so the narration can use the actual words, not a paraphrase.
 
-**Solution**: scene-anchored extraction happens at Stage 2 (`scene_extract.py`), not inside session_doc.py. Each `NN_*.md` already pairs `## Scene summary` with `## Verbatim moments`. The Quote Ledger ([`quote_ledger.py`](../../quote_ledger.py)) is the inspection / re-matching tool the Web UI uses to drag quotes between scenes.
+**Solution**: scene-anchored extraction happens at Stage 2 (`scene_extract.py`), not inside the sd_narrate.py loop. Each `NN_*.md` already pairs `## Scene summary` with `## Verbatim moments`. The Quote Ledger ([`quote_ledger.py`](../../quote_ledger.py)) is the inspection / re-matching tool the Web UI uses to drag quotes between scenes.
 
 ### 7. Speaker labels in extractions
 
 VTT speaker labels often include player names in parentheses: `Thorin (Joe)`, `GM (Kostadis)`. These need normalising before they bleed into narration prose.
 
-Normalisation is now Stage 2's responsibility (in `scene_extract.py`). session_doc.py treats `## Verbatim moments` as authoritative — it does not re-normalise.
+Normalisation is now Stage 2's responsibility (in `scene_extract.py`). `sd_narrate.py` treats `## Verbatim moments` as authoritative — it does not re-normalise.

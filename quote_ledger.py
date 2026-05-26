@@ -130,14 +130,14 @@ class QuoteLedger:
     # ── Population ───────────────────────────────────────────────────
 
     def sync(self, roleplay_dir: Path, extract_dir: Path,
-             scenes: list[dict], filename_for_scene=None) -> dict:
+             scenes: list[dict], filename_for_scene) -> dict:
         """Parse extraction files, populate DB, match quotes to scenes.
 
-        filename_for_scene — optional callable (idx, narrator, scene_name) -> str
+        filename_for_scene — required callable (idx, narrator, scene_name) -> str
                              used to compute the scene-extraction filename inside
-                             extract_dir. Defaults to session_doc.extraction_filename
-                             (old NN_<narrator>_<slug>.md). New-flow callers pass a
-                             lambda that produces NN_<slug>.md.
+                             extract_dir. New-flow callers pass a lambda that
+                             produces NN_<slug>.md. (PR #52 deleted the legacy
+                             session_doc.extraction_filename default.)
 
         Returns {total, matched, unassigned}.
         """
@@ -174,12 +174,8 @@ class QuoteLedger:
         self.conn.commit()
 
     def _match_to_scenes(self, extract_dir: Path, scenes: list[dict],
-                         filename_for_scene=None) -> None:
+                         filename_for_scene) -> None:
         """Match un-pinned quotes to scenes by fuzzy-matching against scene extractions."""
-        if filename_for_scene is None:
-            from session_doc import extraction_filename
-            filename_for_scene = extraction_filename
-
         for scene in scenes:
             idx = scene["index"]
             fname = filename_for_scene(idx, scene["narrator"], scene.get("scene", ""))

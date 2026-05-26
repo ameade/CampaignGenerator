@@ -38,7 +38,7 @@ python fivetools_ingest.py /mnt/g/path/to/book.json --book-id 7421
 
 ## Retrieval/render separation (required)
 
-Render pipelines (`prep.py`, `session_doc.py`, `planning.py`) must **not** consume raw `rpg_retriever` output — they consume a human-approved `docs/dossier_proposal.md` file instead.
+Render pipelines (`prep.py`, `sd_plan.py`, `planning.py`) must **not** consume raw `rpg_retriever` output — they consume a human-approved `docs/dossier_proposal.md` file instead.
 
 ```bash
 # 1. Produce a candidates file from a retrieval query
@@ -53,7 +53,7 @@ python dossier_proposer.py "party arrives at Icespire Hold"
 
 # 3. Render pipelines consume it:
 python prep.py --campaign-dir . --require-proposal --beat "The party enters Icespire Hold"
-python session_doc.py recap.md --scene-extractions scene_extractions/ --per-scene-output narration/ --campaign-dir . --require-proposal …
+python sd_plan.py --scene-extractions scene_extractions/ --characters "…" --campaign-dir . --require-proposal …
 python planning.py --npc docs/npcs/*.md --output docs/planning.md --campaign-dir . --require-proposal
 ```
 
@@ -77,6 +77,6 @@ All CLI scripts accept explicit flags, with env var fallbacks:
 
 - `--palace` / `MEMPALACE_PALACE_PATH` — passed through to `mempalace-mcp`.
 - `--rpglib-db` / `RPGLIB_DB` — path to `rpg_library.db`.
-- `--campaign-dir` / `CAMPAIGN_DIR` — campaign workspace root. Default: CWD for CLIs, the config file's parent directory for `prep.py`, the recap's parent for `session_doc.py`.
+- `--campaign-dir` / `CAMPAIGN_DIR` — campaign workspace root. Default: CWD for CLIs, the config file's parent directory for `prep.py`, the scene_extractions parent for `sd_plan.py`.
 
 The MCP server picks up `MEMPALACE_PALACE_PATH` / `RPGLIB_DB` from the environment and from `config.yaml` keys `mempalace.palace` / `rpglib_db`.

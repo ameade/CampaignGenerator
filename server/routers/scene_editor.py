@@ -527,7 +527,13 @@ def _build_reextract_cmd(batch: bool = False,
 
 
 def _build_narrate_cmd(scene_num: int) -> list[str] | tuple[None, str]:
-    """Stage 3: session_doc.py --scene-extractions ... --per-scene-output ... --scene N."""
+    """Stage 3: sd_narrate.py for a single scene.
+
+    Phase 5 of SessionDocRefactor: session_doc.py is gone. We point at
+    sd_narrate.py and pass plan.md explicitly via --plan (instead of the
+    old --plan-file). --context lives on sd_consistency now; sd_narrate
+    has --context for the --reflections code path only.
+    """
     summary = _session_summary_path()
     if summary is None or not summary.exists():
         return None, "session-summary.md not found — run Stage 1 first"
@@ -539,10 +545,15 @@ def _build_narrate_cmd(scene_num: int) -> list[str] | tuple[None, str]:
         return None, "narration_dir not configured"
     nd.mkdir(parents=True, exist_ok=True)
 
+    plan_path = nd / "plan.md"
+    if not plan_path.exists():
+        return None, "plan.md not found — run Plan & Check first"
+
     cmd = [
         python_exe(),
-        str(SCRIPT_DIR / "session_doc.py"),
+        str(SCRIPT_DIR / "sd_narrate.py"),
         str(summary),
+        "--plan", str(plan_path),
         "--scene-extractions", str(sx_dir),
         "--per-scene-output", str(nd),
         "--scene", str(scene_num),
@@ -558,18 +569,12 @@ def _build_narrate_cmd(scene_num: int) -> list[str] | tuple[None, str]:
         cmd += ["--prose-mode"]
     if CONFIG.get("reflections"):
         cmd += ["--reflections"]
+        # --reflections needs --context to draw on; without it the flag is a no-op
+        for ctx in CONFIG.get("context") or []:
+            if ctx:
+                cmd += ["--context", ctx]
     if CONFIG.get("narration_genre"):
         cmd += ["--narration-genre", CONFIG["narration_genre"]]
-    for ctx in CONFIG.get("context") or []:
-        if ctx:
-            cmd += ["--context", ctx]
-    if CONFIG.get("use_enhanced_sections", True):
-        enhanced_path = nd / "enhanced_sections.md"
-        if enhanced_path.exists():
-            cmd += ["--enhanced-sections", str(enhanced_path)]
-    plan_path = nd / "plan.md"
-    if plan_path.exists():
-        cmd += ["--plan-file", str(plan_path)]
     return cmd
 
 
@@ -967,17 +972,42 @@ async def api_scrub_all():
     )
 
 
-def _build_plan_cmd() -> list[str] | tuple[None, str]:
-    """Run session_doc.py --plan-only against session-summary.md.
+def _build_consistency_cmd() -> list[str] | tuple[None, str]:
+    """Phase 5 — sd_consistency.py for Pass 1.
 
-    Produces narration_dir/plan.md + enhanced_sections.md +
-    consistency_report.md. After this runs once per session,
-    per-scene Narrate reuses those cached artifacts and skips
-    Pass 1 / Pass 2 / Pass 3.
+    Runs only if --context is configured; otherwise the editor skips
+    consistency entirely and just runs sd_plan.
     """
     summary = _session_summary_path()
     if summary is None or not summary.exists():
         return None, "session-summary.md not found — run Stage 1 first"
+    nd = _narration_dir()
+    if nd is None:
+        return None, "narration_dir not configured"
+    nd.mkdir(parents=True, exist_ok=True)
+
+    context = [c for c in (CONFIG.get("context") or []) if c]
+    if not context:
+        return None, "no --context files configured"
+
+    cmd = [
+        python_exe(),
+        str(SCRIPT_DIR / "sd_consistency.py"),
+        str(summary),
+        "--out", str(nd / "consistency_report.md"),
+    ]
+    for ctx in context:
+        cmd += ["--context", ctx]
+    return cmd
+
+
+def _build_plan_cmd() -> list[str] | tuple[None, str]:
+    """Phase 5 — sd_plan.py for Pass 3.
+
+    --context no longer lives here — consistency is its own explicit
+    stage (see _build_consistency_cmd). The /plan endpoint chains
+    consistency → plan when context files are configured.
+    """
     sx_dir = _scene_extractions_dir()
     if sx_dir is None:
         return None, "scene_extractions_dir not configured"
@@ -986,45 +1016,66 @@ def _build_plan_cmd() -> list[str] | tuple[None, str]:
         return None, "narration_dir not configured"
     nd.mkdir(parents=True, exist_ok=True)
 
+    characters = CONFIG.get("characters")
+    if not characters:
+        return None, "characters not configured (sd_plan needs --characters)"
+
     cmd = [
         python_exe(),
-        str(SCRIPT_DIR / "session_doc.py"),
-        str(summary),
+        str(SCRIPT_DIR / "sd_plan.py"),
         "--scene-extractions", str(sx_dir),
-        "--per-scene-output", str(nd),
-        "--plan-only",
-        "--no-plan-review",
+        "--characters", characters,
+        "--out", str(nd / "plan.md"),
     ]
-    for flag, key in [("--party", "party"), ("--voice-dir", "voice_dir"),
-                      ("--characters", "characters")]:
-        if CONFIG.get(key):
-            cmd += [flag, CONFIG[key]]
-    for ctx in CONFIG.get("context") or []:
-        if ctx:
-            cmd += ["--context", ctx]
+    if CONFIG.get("party"):
+        cmd += ["--party", CONFIG["party"]]
+    # session-summary.md as the authoritative event log when present
+    summary = _session_summary_path()
+    if summary is not None and summary.exists():
+        cmd += ["--session-summary", str(summary)]
     return cmd
 
 
 @router.get("/plan")
 async def api_plan():
-    result = _build_plan_cmd()
-    if isinstance(result, tuple):
-        _, err = result
+    """Run sd_consistency.py (if --context configured) then sd_plan.py.
+
+    Both subprocesses stream into the same SSE response; the user sees
+    one "Plan & Check" run with consistency output appearing first when
+    relevant. Phase 5's chosen consistency-UX option A: auto-chain.
+    """
+    plan_result = _build_plan_cmd()
+    if isinstance(plan_result, tuple):
+        _, err = plan_result
         return JSONResponse({"ok": False, "error": err}, status_code=400)
+    consistency_result = _build_consistency_cmd()
+    # consistency is optional — a tuple here means "skip, no --context"
     nd = _narration_dir()
 
     def _done(rc: int | None) -> None:
         outputs: list[str] = []
         if nd is not None:
-            for name in ("plan.md", "enhanced_sections.md"):
+            for name in ("consistency_report.md", "plan.md"):
                 p = nd / name
                 if p.exists():
                     outputs.append(str(p))
         _record_activity(stage="plan", rc=rc, outputs=outputs)
 
+    async def _stream_chained():
+        """Stream consistency stdout (if applicable), then plan stdout."""
+        from server.subprocess_runner import stream_subprocess as _stream
+
+        if not isinstance(consistency_result, tuple):
+            async for chunk in _stream(consistency_result,
+                                        cwd=CONFIG.get("work_dir")):
+                yield chunk
+        async for chunk in _stream(plan_result,
+                                    cwd=CONFIG.get("work_dir"),
+                                    on_complete=_done):
+            yield chunk
+
     return StreamingResponse(
-        stream_subprocess(result, cwd=CONFIG.get("work_dir"),
-                          on_complete=_done),
+        _stream_chained(),
         media_type="text/event-stream",
         headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
     )

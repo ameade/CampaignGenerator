@@ -17,8 +17,11 @@ frontend/                   # Vue 3 + TypeScript + Pinia + Vue Router
 # ── CLI tools ──
 campaignlib.py              # Shared library — all scripts import from here
 prep.py                     # CLI: session beat / session arc prep
-session_doc.py              # CLI: post-session narrative document generator
-narrative.py                # Supporting module for session_doc.py
+sd_consistency.py           # CLI: Pass 1 — consistency check (sd_*.py replaced session_doc.py)
+sd_plan.py                  # CLI: Pass 3 — narrative plan
+sd_narrate.py               # CLI: Pass 5 — per-scene narration
+session_doc/                # Shared helpers (io, voice, roster, examples, narrate)
+narrative.py                # Standalone experimental: VTT-anchored narration CLI
 quote_ledger.py             # SQLite-backed VTT dialogue tracking
 npc_table.py                # CLI: generate NPC reference table
 distill.py                  # CLI: convert summaries → world_state.md
@@ -59,7 +62,7 @@ tests/test_prep.py          # Tests for campaignlib, prep, and session_doc logic
 |---|---|
 | `docs/core/architecture.md` | **Start here.** System map: layers, pipelines, on-disk state, recurring concepts, "common task → start here" table |
 | `docs/cli/cli_tools.md` | Per-script invocations and flags (prep, campaign_state, planning, party, distill, query, …); typical new-campaign workflow |
-| `docs/cli/session_doc_pipeline.md` | session_doc.py 5-pass + 4-stage pipeline, all flags, voice files, dialogue handling, recap context, player-name mapping, token scaling, plus design rationale |
+| `docs/cli/session_doc_pipeline.md` | post-session pipeline: sd_consistency / sd_plan / sd_narrate flags, voice files, dialogue handling, recap context, player-name mapping, token scaling, plus design rationale |
 | `docs/web/web_ui.md` | FastAPI/Vue UI: pages, Session Doc Editor, Quote Ledger, Connection Graph, `ui_config.yaml`, dev workflow |
 | `docs/rlm/dossier_aliases.md` | Dossier merge rules and cross-pipeline alias propagation |
 | `docs/rlm/rlm_pipeline.md` | Three-state retrieval, ingest flow, MCP tools, palace/rpglib path resolution |
@@ -104,7 +107,7 @@ All scripts look for `config.yaml` in the CWD first, then fall back to `config/c
 
 ### Retrieval/render separation (RLM)
 
-Render pipelines (`prep.py`, `session_doc.py`, `planning.py`) must **not** consume raw `rpg_retriever` output. They consume a human-approved `docs/dossier_proposal.md` file instead. Retrieval is a scope decision; rendering is a prose decision; the proposal is the human checkpoint between them.
+Render pipelines (`prep.py`, `sd_narrate.py`, `planning.py`) must **not** consume raw `rpg_retriever` output. They consume a human-approved `docs/dossier_proposal.md` file instead. Retrieval is a scope decision; rendering is a prose decision; the proposal is the human checkpoint between them.
 
 A CI test (`tests/test_retrieve_render_isolation.py`) fails if any function body contains both a retrieval call (`retrieve`, `search_hierarchical`, `rpg_search`, …) and a render call (`stream_api`, `call_api`). Don't bypass this — fix the structure.
 

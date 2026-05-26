@@ -15,7 +15,8 @@ session-summary.md                           ◄── HUMAN REVIEW
     ▼  Stage 2 — scene_extract.py          ◄── Web UI: "Re-Extract Quotes"
 scene_extractions/NN_<slug>.md               ◄── HUMAN REVIEW
     │
-    ▼  Stage 3 — session_doc.py            ◄── Web UI: "Plan & Check" + per-scene "Narrate"
+    ▼  Stage 3 — sd_consistency.py + sd_plan.py + sd_narrate.py
+                                              ◄── Web UI: "Plan & Check" + per-scene "Narrate"
 narration/session_doc_scene_NN_<slug>.md     ◄── HUMAN REVIEW
     │
     ▼  Stage 4 — assemble.py               ◄── Web UI: "Assemble Doc"
@@ -51,10 +52,11 @@ when you don't need live streaming.
 ## I want to drive this from the CLI
 
 Open [`session_doc_pipeline.md`](session_doc_pipeline.md). It
-covers every flag, voice files, dialogue handling, the 5-pass internals
-of `session_doc.py`, batch mode (`--batch` / `--submit-only` /
-`--collect`), and the older single-shot mode if you want to iterate on
-one character's voice.
+covers every flag, voice files, dialogue handling, the three live
+LLM passes (now split across `sd_consistency.py` / `sd_plan.py` /
+`sd_narrate.py`), and batch mode (`--batch` / `--submit-only` /
+`--collect`) for the upstream `enhance_summary.py` and `scene_extract.py`
+stages.
 
 Minimal command-line tour:
 
@@ -71,12 +73,22 @@ python scene_extract.py "$SESS"/*.vtt \
     --summary    "$SESS/session-summary.md" \
     --output-dir "$SESS/scene_extractions/"
 
-# Stage 3 (one file per scene)
-python session_doc.py "$SESS/session-summary.md" \
+# Stage 3a — narrative plan (assigns one narrator per scene)
+python sd_plan.py \
     --scene-extractions "$SESS/scene_extractions/" \
-    --voice-dir voice/ \
     --characters "Vukradin, Valphine, Soma, Brewbarry" \
-    --per-scene-output "$SESS/narration/"
+    --party docs/party.md \
+    --session-summary "$SESS/session-summary.md" \
+    --out "$SESS/narration/plan.md"
+# REVIEW $SESS/narration/plan.md
+
+# Stage 3b — per-scene narration (one file per scene)
+python sd_narrate.py "$SESS/session-summary.md" \
+    --plan              "$SESS/narration/plan.md" \
+    --scene-extractions "$SESS/scene_extractions/" \
+    --voice-dir         voice/ \
+    --characters        "Vukradin, Valphine, Soma, Brewbarry" \
+    --per-scene-output  "$SESS/narration/"
 
 # Stage 4
 python assemble.py "$SESS/narration/" \

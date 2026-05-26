@@ -15,7 +15,7 @@ import sys
 from pathlib import Path
 
 from campaignlib import load_agent_prompt, make_client, stream_api
-from session_doc_io import load_extractions, load_scene_extractions, parse_plan
+from session_doc.io import load_extractions, load_scene_extractions, parse_plan
 
 
 def main() -> None:
@@ -48,10 +48,37 @@ def main() -> None:
     parser.add_argument("--dgx-endpoint", default=None, metavar="URL",
                         help="Route LLM calls to an OpenAI-compatible server.")
     parser.add_argument("--dgx-model", default=None, metavar="NAME")
+    parser.add_argument("--campaign-dir", default=None, metavar="DIR",
+                        help="Campaign workspace root (default: $CAMPAIGN_DIR or "
+                             "--scene-extractions parent). Used to locate "
+                             "docs/dossier_proposal.md.")
+    parser.add_argument("--require-proposal", action="store_true",
+                        help="Refuse to run unless <campaign-dir>/docs/"
+                             "dossier_proposal.md exists and has been approved.")
     args = parser.parse_args()
 
     if args.fast:
         args.model = "claude-haiku-4-5-20251001"
+
+    # Proposal gate runs BEFORE anything else so unapproved proposals abort
+    # before scene-extraction loading or any Claude calls.
+    if args.require_proposal:
+        import os as _os
+
+        from proposal_loader import (
+            ProposalNotApproved,
+            ProposalRequired,
+            require_approved_proposal,
+        )
+        campaign_dir = (
+            args.campaign_dir
+            or _os.environ.get("CAMPAIGN_DIR")
+            or str(Path(args.scene_extractions).expanduser().resolve().parent)
+        )
+        try:
+            require_approved_proposal(campaign_dir)
+        except (ProposalRequired, ProposalNotApproved) as exc:
+            parser.error(str(exc))
 
     # Load scene extractions (the authoritative scene checklist).
     sx_dir = Path(args.scene_extractions).expanduser()

@@ -372,7 +372,7 @@ delivers for planning.
 ### [ ] Per-step batch-mode toggle for distill / party / planning / campaign_state extractions
 
 **Context**
-`scene_extract.py` and `session_doc.py` already support Anthropic
+`scene_extract.py` and the `sd_*.py` family already support Anthropic
 Message Batches API (`--batch`) for the per-scene extraction +
 narration passes — 50% off list price in exchange for
 non-streaming, poll-based progress. The shared infrastructure is in

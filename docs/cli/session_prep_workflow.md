@@ -241,7 +241,7 @@ hood) a side effect of querying, which violates the scope rule.
 ## Step 3 — render with `--require-proposal`
 
 Now prep actually runs. `prep.py` is the primary render pipeline; the
-same convention works for `session_doc.py` and `planning.py`.
+same convention works for `sd_plan.py` and `planning.py`.
 
 ```bash
 cd ~/campaigns/icespire

@@ -38,7 +38,7 @@ Users specify **campaign directory** + **session directory** on the Session Conf
 **Session Workflow** (wizard steps):
 1. **Session Config** — set campaign_dir and session_dir; all paths auto-derived
 2. **VTT Summary** — convert .vtt transcript to session summary + roleplay highlights
-3. **Scene Extraction** — run session_doc.py passes 1–4 to produce per-scene extraction files
+3. **Scene Extraction** — run scene_extract.py + sd_consistency.py + sd_plan.py to produce per-scene extraction files, plan.md, and consistency_report.md
 4. **Session Doc Editor** — three-panel editor (scene list / extraction editor / VTT source + quote ledger)
 
 **Grounding Docs**: Campaign State, World State, Party Document, Planning Document
@@ -59,7 +59,7 @@ Three-panel layout for the extract → edit → narrate → assemble workflow:
 - **Centre**: extraction file editor with save/reload, token estimates, streaming narration output
 - **Right**: tabbed — VTT Source (roleplay extractions for reference) and Quote Ledger
 
-**Workflow**: click a scene → review/edit extraction → Narrate (streams `session_doc.py --from-extractions --scene N`) → repeat → Assemble Doc.
+**Workflow**: click a scene → review/edit extraction → Narrate (streams `sd_narrate.py --plan plan.md --scene N`) → repeat → Assemble Doc.
 
 The editor has a config panel for setting paths (session recap, extract_dir, roleplay_extract_dir, etc.) that auto-populates from the Session Config page. The config panel also accepts characters, voice_dir, examples, and narrate_tokens.
 

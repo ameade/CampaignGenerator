@@ -221,7 +221,9 @@ session-summary.md                                 ◄── HUMAN REVIEW
     ▼  Stage 2 — scene_extract.py                  (per-scene · cached VTT · --batch ✓)
 scene_extractions/NN_<slug>.md                     ◄── HUMAN REVIEW
     │
-    ▼  Stage 3 — session_doc.py --per-scene-output (5-pass narration; per-scene files)
+    ▼  Stage 3a — sd_consistency.py                (Pass 1: continuity check, optional)
+    ▼  Stage 3b — sd_plan.py                       (Pass 3: one narrator per scene)
+    ▼  Stage 3c — sd_narrate.py --per-scene-output (Pass 5: per-scene narration)
 narration/session_doc_scene_NN_<slug>.md           ◄── HUMAN REVIEW
     │
     ▼  Stage 4 — assemble.py
@@ -270,24 +272,39 @@ python scene_extract.py ... --batch --collect      # retrieve from sidecar
 
 Default model: `claude-sonnet-4-6`.
 
-### session_doc.py
+### sd_consistency.py / sd_plan.py / sd_narrate.py
 
-Stage 3: per-scene first-person narration. Writes one narration file per
-scene under `--per-scene-output DIR`. Stage 4 (`assemble.py`) combines
-them into a single session document. For full pass details, all flags,
-and voice files, see
-[`docs/session_doc_pipeline.md`](session_doc_pipeline.md).
+Stage 3: post-Phase-5 split of the old `session_doc.py` monolith into
+three single-LLM-call tools. Each reads its inputs from disk and writes
+its output, then exits. For full pass details, all flags, and voice
+files, see [`docs/session_doc_pipeline.md`](session_doc_pipeline.md).
 
 ```bash
-# Stage 3 of the 4-stage flow — writes one file per scene
-python session_doc.py session-summary.md \
+# Pass 1 — continuity check (optional; runs only if --context is supplied)
+python sd_consistency.py session-summary.md \
+    --context docs/campaign_state.md docs/world_state.md docs/party.md \
+    --out     narration/consistency_report.md
+
+# Pass 3 — narrative plan (assigns one narrator per scene)
+python sd_plan.py \
+    --scene-extractions scene_extractions/ \
+    --characters        "Vukradin, Valphine, Soma, Brewbarry" \
+    --party             docs/party.md \
+    --session-summary   session-summary.md \
+    --out               narration/plan.md
+# REVIEW narration/plan.md before running narrate
+
+# Pass 5 — per-scene narration (one file per scene)
+python sd_narrate.py session-summary.md \
+    --plan              narration/plan.md \
     --scene-extractions scene_extractions/ \
     --voice-dir         voice/ \
+    --examples          examples/ \
     --characters        "Vukradin, Valphine, Soma, Brewbarry" \
     --per-scene-output  narration/
 
 # Re-narrate a single scene after editing its quote file
-python session_doc.py ... --scene 3
+python sd_narrate.py ... --scene 3
 ```
 
 Default model: `claude-sonnet-4-6`. `--fast` switches to Haiku.

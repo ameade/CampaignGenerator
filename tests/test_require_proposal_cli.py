@@ -122,19 +122,21 @@ class TestPrepRequireProposal:
         assert "not been approved" not in result.stderr
 
 
-# ── session_doc.py ───────────────────────────────────────────────────────
+# ── sd_plan.py ───────────────────────────────────────────────────────────
+# Phase 5 of SessionDocRefactor: --require-proposal migrated from
+# session_doc.py to sd_plan.py. Same semantics, same error strings, same
+# proposal_loader call path.
 
 
-class TestSessionDocRequireProposal:
+class TestSdPlanRequireProposal:
     def test_missing_proposal_refused(self, tmp_path: Path):
-        recap = tmp_path / "recap.md"
-        recap.write_text("recap", encoding="utf-8")
-        out_dir = tmp_path / "narration"
+        sx_dir = tmp_path / "scene_extractions"
+        sx_dir.mkdir()
         result = _run(
             [
-                sys.executable, str(REPO_ROOT / "session_doc.py"),
-                str(recap),
-                "--per-scene-output", str(out_dir),
+                sys.executable, str(REPO_ROOT / "sd_plan.py"),
+                "--scene-extractions", str(sx_dir),
+                "--characters", "Vukradin",
                 "--campaign-dir", str(tmp_path),
                 "--require-proposal",
             ]
@@ -143,14 +145,14 @@ class TestSessionDocRequireProposal:
         assert "dossier proposal not found" in result.stderr
 
     def test_unapproved_proposal_refused(self, tmp_path: Path):
-        recap = tmp_path / "recap.md"
-        recap.write_text("recap", encoding="utf-8")
+        sx_dir = tmp_path / "scene_extractions"
+        sx_dir.mkdir()
         _write_proposal(tmp_path, "# X\n\n> **Status:** candidates only.\n")
         result = _run(
             [
-                sys.executable, str(REPO_ROOT / "session_doc.py"),
-                str(recap),
-                "--per-scene-output", str(tmp_path / "narration"),
+                sys.executable, str(REPO_ROOT / "sd_plan.py"),
+                "--scene-extractions", str(sx_dir),
+                "--characters", "Vukradin",
                 "--campaign-dir", str(tmp_path),
                 "--require-proposal",
             ]

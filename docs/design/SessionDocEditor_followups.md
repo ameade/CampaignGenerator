@@ -10,10 +10,10 @@ Treat the items below as the punch list for "what would I do next on the Session
 
 Each of these was flagged in the matching PR body. None block the editor's day-to-day usability; they're refinements that the spec called for but that I chose not to land in the same PR to keep blast radius small.
 
-### `session_doc.py` CLI flag cleanup
+### ~~`session_doc.py` CLI flag cleanup~~ (DONE — Phase 5 of SessionDocRefactor)
 
 - **What** — drop `--from-extractions`, `--by-scene`, `--roleplay-extract-dir` from the argparse surface, and the internal code paths that branch on them.
-- **Why deferred** — the web UI stopped using these flags in Phase 1, but they drive substantial conditional logic inside `session_doc.py` (`session_doc.py:1147–1941` referenced them at the time of the rebuild). Removing them cleanly requires touching every `args.from_extractions` / `args.by_scene` branch and verifying the new-flow paths cover those cases. The web UI rebuild was higher-leverage; this is a CLI-only cleanup.
+- **Status (Phase 5 of SessionDocRefactor):** `session_doc.py` has been deleted. The legacy flags went with it. Pass 1 / Pass 3 / Pass 5 are now `sd_consistency.py` / `sd_plan.py` / `sd_narrate.py`.
 - **Acceptance** — `python -c "from session_doc import main"` still works; running the CLI with the new flags only (`--scene-extractions`, `--per-scene-output`, `--scene N`, `--plan-only`) succeeds; no `args.from_extractions` / `args.by_scene` / `args.roleplay_extract_dir` references remain.
 
 ### Amber-when-stale per-scene lifecycle dots

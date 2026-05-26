@@ -158,7 +158,7 @@ graph TB
         DOSSIER["<b>docs/dossier_proposal.md</b><br/>'candidates only' → 'approved by …'"]
         LOADER["<b>proposal_loader.py</b><br/>require_approved_proposal()<br/>attach_proposal_to_documents()"]
         PREP["<b>prep.py</b><br/>--require-proposal"]
-        SESSDOC["<b>session_doc.py</b><br/>--require-proposal"]
+        SESSDOC["<b>sd_plan.py</b><br/>--require-proposal"]
         PLANNING["<b>planning.py</b><br/>--require-proposal"]
     end
 
@@ -337,7 +337,7 @@ This is the **dossier proposal** flow:
 
 If `--require-proposal` is not passed but an approved proposal exists, the render scripts opportunistically attach it. The flag is the strict form: refuse to run without one.
 
-This flow exists because the heavyweight prep scripts (`prep.py`, `session_doc.py`, `planning.py`) make many Claude API calls each, and the cost of running them on bad grounding is high. The proposal is the human checkpoint that says "yes, *these* sources are the right ones for this session."
+This flow exists because the heavyweight prep scripts (`prep.py`, `sd_plan.py` + `sd_narrate.py`, `planning.py`) make many Claude API calls each, and the cost of running them on bad grounding is high. The proposal is the human checkpoint that says "yes, *these* sources are the right ones for this session."
 
 ---
 
@@ -353,7 +353,7 @@ It walks every `.py` file in the repo (`Path.rglob("*.py")`), parses each into a
 
 No function in the repo can call MemPalace and Claude in the same body. To do both you must split into two functions, with the dossier proposal between them. Because this is a test that runs in CI, the rule cannot be silently re-violated.
 
-It currently passes for 31 modules including `prep.py`, `planning.py`, `session_doc.py`, `polish.py`, `proposal_loader.py`, the `server/routers/*` family, and the `scabard_sdk/` modules absorbed from main during the rebase.
+It currently passes for 31 modules including `prep.py`, `planning.py`, `sd_*.py`, `polish.py`, `proposal_loader.py`, the `server/routers/*` family, and the `scabard_sdk/` modules absorbed from main during the rebase.
 
 This test is the operational expression of the rule from the global `~/.claude/CLAUDE.md`: *LLMs are renderers, not architects. Scope decisions need a human checkpoint.* The test prevents engineers from accidentally building "LLM extracts → LLM structures → LLM renders" pipelines that compound errors silently.
 
@@ -627,7 +627,7 @@ Routing:
 | `dossier_proposer.py` | Writes `docs/dossier_proposal.md` from a retrieval query. |
 | `proposal_loader.py` | `require_approved_proposal` / `attach_proposal_to_documents`. |
 | `mcp_server.py` | MCP server exposing `rpg_search`, `propose_dossier`, `suggest_conversion`. |
-| `prep.py`, `session_doc.py`, `planning.py` | Render scripts; each accepts `--campaign-dir` + `--require-proposal`. |
+| `prep.py`, `sd_plan.py`, `planning.py` | Render scripts that accept `--campaign-dir` + `--require-proposal`. (`sd_consistency` / `sd_narrate` inherit the gate transitively because they consume artefacts produced after the gate passes.) |
 | `tests/test_retrieve_render_isolation.py` | The CI invariant. |
 | `tests/test_require_proposal_cli.py` | End-to-end CLI gate behavior. |
 | `tests/test_dossier_proposer.py`, `tests/test_proposal_loader.py`, `tests/test_mempalace_client.py`, `tests/test_fivetools_ingest.py`, `tests/test_suggest_conversion.py`, `tests/test_rpg_retriever.py` | Unit coverage per module. |
@@ -678,7 +678,7 @@ python dossier_proposer.py "party arrives at Icespire Hold"
 
 # (prep flow) render with the approved proposal as grounding
 python prep.py --campaign-dir . --require-proposal --beat "The party enters Icespire Hold"
-python session_doc.py recap.md --scene-extractions scene_extractions/ --per-scene-output narration/ --campaign-dir . --require-proposal …
+python sd_plan.py --scene-extractions scene_extractions/ --characters "…" --campaign-dir . --require-proposal …
 python planning.py --npc docs/npcs/*.md --output docs/planning.md --campaign-dir . --require-proposal
 ```
 
