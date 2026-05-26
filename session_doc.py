@@ -46,6 +46,7 @@ from typing import Callable
 from campaignlib import (
     build_alias_normalizer,
     format_npc_roster,
+    load_agent_prompt,
     load_alias_map,
     load_file_optional,
     make_client,
@@ -55,30 +56,7 @@ from campaignlib import (
 
 # ── Pass 1: Consistency check ──────────────────────────────────────────────────
 
-CONSISTENCY_SYSTEM = """\
-You are a continuity editor for a D&D campaign. You will be given a session recap and
-one or more campaign context documents (campaign state, world state, party document).
-
-Your job: identify every factual error, contradiction, or questionable claim in the recap.
-
-Look for:
-- Wrong NPC names, titles, or factions
-- Events described as completed that haven't happened yet (per campaign state)
-- Attributing actions or items to the wrong character
-- Lore contradictions against world_state (places, factions, history)
-- Character abilities or items that don't match their sheet
-- Timeline issues (referencing events out of order)
-- Ambiguous claims that might confuse future sessions
-
-For each issue, output:
-- **Location**: which section of the recap (Summary / Memorable Moments / Scenes / NPCs / etc.)
-- **Issue**: what is wrong or uncertain
-- **Evidence**: what the context documents say
-- **Suggested fix**: a brief correction
-
-If nothing is wrong, say so clearly.
-Output only the consistency report. No preamble.
-"""
+CONSISTENCY_SYSTEM = load_agent_prompt("session_doc/consistency")
 
 # ── Pass 2: Enhance structured sections ───────────────────────────────────────
 
@@ -114,166 +92,19 @@ No preamble or commentary.
 
 # ── Pass 3: Narrative plan ────────────────────────────────────────────────────
 
-PLAN_SYSTEM = """\
-You are planning a first-person D&D narrative in the style of a novel where each
-scene is narrated by a different character — like a book where one scene is Vukradin,
-the next is Soma, the next is Valphine, each showing the same unfolding story from
-their own eyes.
-
-You will be given numbered roleplay extractions (Chunk 1, Chunk 2, …).
-Each chunk covers a chronological slice of the session.
-
-Your job: identify the key scenes in the session and assign one narrator to each.
-
-CRITICAL: If an "Available narrators" list is provided:
-- Use ONLY those characters as narrators. Never assign a scene to an NPC, a guest
-  character, or anyone not on the list — even if they have interesting moments.
-- Distribute narrators based on who has the most interesting perspective on each scene.
-  A character may narrate more than one scene. Rotate when perspectives are equal.
-
-CRITICAL: If a "Session Scenes" checklist is provided:
-- Use EXACTLY those scenes and no others. Do not invent additional scenes.
-- Every scene on the checklist must appear in your plan with a narrator assigned.
-- The checklist is the complete and authoritative list of scenes for this session.
-
-If no checklist is provided, identify the key scenes yourself and cover the entire
-session chronologically.
-
-For each scene:
-- Give it a short name (3–6 words)
-- Assign the chunk it comes from
-- Assign one narrator — the character with the most interesting or revealing perspective
-  on that scene. Rotate through the roster so no character dominates.
-- Write a one-sentence FOCUS on what makes this scene theirs specifically
-
-Output ONLY the plan in this exact format — no preamble, no commentary:
-
-## Scene 1
-narrator: [name]
-chunks: 1
-scene: [short scene name]
-focus: [one sentence — why this character narrates this scene]
-
-## Scene 2
-narrator: [name]
-chunks: 1
-scene: [short scene name]
-focus: [one sentence]
-
-## Scene 3
-narrator: [name]
-chunks: 2
-scene: [short scene name]
-focus: [one sentence]
-
-(assign every scene a narrator — pick the best perspective — every character should appear if possible)
-"""
+PLAN_SYSTEM = load_agent_prompt("session_doc/plan")
 
 # ── Pass 5: Per-character narration ───────────────────────────────────────────
 
-NARRATE_SYSTEM_BASE = """\
-You are writing one section of a first-person D&D session narrative.
-{genre_directive}
-You will be given:
-- The narrator's name and a one-sentence focus
-{scene_scope_line}{scene_events_line}- A handoff line from the previous narrator (if any)
-- This character's extracted moments — their exact dialogue, reactions, and emotional beats
-- A party document with backstory, personality, and relationships
-{examples_block}
-{rendering_instruction}{length_instruction}
-Every significant moment in the extracted list should appear in the text.
+NARRATE_SYSTEM_BASE = load_agent_prompt("session_doc/narrate/base")
 
-{dialogue_instruction}
+EXAMPLES_BLOCK = load_agent_prompt("session_doc/narrate/examples_block")
 
-FOCUS ON:
-- The emotional weight of each moment: why did they do or say that, what did it cost them
-- What this character personally felt, feared, hoped for, or noticed in this moment
-- How their backstory and relationships colour what they said and why
+PER_CHAR_EXAMPLES_BLOCK = load_agent_prompt("session_doc/narrate/per_char_examples")
 
-ALLOW:
-- Non-linear structure for the narrator's inner life — flashbacks, memories, digressions,
-  a character's mind drifting to something from their past
-- The narrator's voice intruding on the action ("He tries not to stare...")
-- Humour, irony, self-deprecation — if that fits the character
-- Short, punchy paragraphs and sentence fragments for rhythm
-- Dates or scene headers if they help orient the reader
+VOICE_SPEC_BLOCK = load_agent_prompt("session_doc/narrate/voice_spec")
 
-CRITICAL: The actual events of the session must appear in the order they occur in the
-extracted moments. Do not reorder, move, or restructure session events — only the
-narrator's internal thoughts and memories may be non-linear.
-
-CRITICAL: This is a first-person memoir. The narrator is always "I". Never use "he",
-"she", or "they" to refer to the narrator — not even in passing. If you find yourself
-writing "[Name] did X", you have left first person — recast it as "I did X". Third
-person is a hard failure in this narration.
-
-AVOID:
-- Summarizing or paraphrasing lines that are already quoted — use the actual words
-- Dry event recaps ("then we went to X and fought Y")
-- Mechanical detail (rolls, HP, spell slots)
-- Generic fantasy prose that could belong to any character
-
-VOICE:
-- First person, emotionally honest, distinctly this character — not a generic narrator
-- The prose between quoted lines should sound like this character reflecting —
-  use their vocabulary, their rhythm, their particular way of seeing the world
-- The Party Document is the authoritative source for each character's class, abilities,
-  and role. Never infer class from the moments list or generic D&D archetypes.
-
-CONTINUITY:
-- If a handoff is provided, pick up naturally from that line
-- End at a natural emotional pause that another voice could follow
-
-Output only the narration. No heading, no name prefix, no commentary.
-"""
-
-EXAMPLES_BLOCK = """\
-- Style reference examples showing the voice, structure, and tone to aim for
-
-STYLE REFERENCE — HANDCRAFTED EXAMPLES:
-Study these carefully. They show what good looks like: the mix of internal monologue and
-dialogue, the non-linear structure, the humour, the character-specific voice, the way
-the narrator's perspective colours everything. Match this quality and style.
-
-{examples}
-
-END OF STYLE REFERENCE
-"""
-
-PER_CHAR_EXAMPLES_BLOCK = """\
-STYLE REFERENCE — {narrator}'s VOICE SPECIFICALLY:
-Match this voice. Any global examples above show overall quality; the passages below
-show how {narrator} sounds in particular — the cadence, the vocabulary, the rhythm,
-the particular way this character sees the world. When the general examples and these
-disagree, these win. Prioritize matching them.
-
-{examples}
-
-END OF {narrator}-SPECIFIC STYLE REFERENCE
-"""
-
-VOICE_SPEC_BLOCK = """\
-AUTHORITATIVE VOICE SPEC — {narrator}:
-The following notes are written by {narrator}'s player. They override any conflicting
-style guidance above. Match the cadence, vocabulary, and tics described here. When in
-doubt about how a sentence should sound, refer to this section first.
-
-{voice_note}
-
-END OF VOICE SPEC
-"""
-
-PREV_VOICE_CONTRAST_BLOCK = """\
-## Previous Section's Voice (for contrast — do NOT imitate)
-
-The previous section was narrated by {prev_narrator}. A sample of their voice:
-
-> {prev_voice_sample}
-
-{narrator}'s voice should sound clearly different from {prev_narrator}'s. Lean into
-what makes {narrator} distinct — their rhythm, their concerns, their particular way
-of speaking — and away from anything that would make these two sections feel written
-by the same hand."""
+PREV_VOICE_CONTRAST_BLOCK = load_agent_prompt("session_doc/narrate/prev_voice_contrast")
 
 
 # ── Helpers ───────────────────────────────────────────────────────────────────
@@ -471,211 +302,14 @@ def format_extractions(extractions: list[tuple[str, str]], heading: str) -> str:
     return f"## {heading}\n\n" + "\n\n---\n\n".join(parts)
 
 
-DIALOGUE_INSTRUCTION_FULL = """\
-THE DIALOGUE IS THE STORY. The moments list contains full exchanges — both sides of each
-conversation. Write them as scenes. Every line from the exchange should appear in the text.
+DIALOGUE_INSTRUCTION_FULL = load_agent_prompt("session_doc/narrate/dialogue_full")
 
-Good:
-  Kaella leaned in close, voice dropping to almost nothing. "You know nothing, my friend.
-  The true dangers ahead would make your blood run cold."
-  I met her eyes. "Then tell me. All of it."
-  She laughed — a short, hollow sound. "And if I do? What does that buy me?"
+DIALOGUE_INSTRUCTION_CONDITIONAL = load_agent_prompt("session_doc/narrate/dialogue_conditional")
 
-Bad:
-  Kaella warned me about dangers I didn't understand, and I pressed her for information.
-
-A reader should feel like they were in the room. Give them the words, both voices,
-the silence between lines. Build prose around the exchanges, not in place of them.\
-"""
-
-DIALOGUE_INSTRUCTION_CONDITIONAL = """\
-USE DIALOGUE IF PRESENT. If the extracted moments include verbatim exchanges, write them
-as full scenes with both voices — every line should appear in the text, not summarised.
-If the extracted moments contain no dialogue (a wordless combat, a solo crossing, a quiet
-moment of action), write from action beats and environment only.
-DO NOT invent or paraphrase dialogue that is not in the extracted moments.\
-"""
-
-PROSE_MODE_INSTRUCTION = """\
-PROSE MODE — IMMERSIVE NARRATION ONLY:
-
-CRITICAL: No mechanical numbers may appear in the prose — not damage values, not hit
-points, not spell slot numbers, not AC, not DCs, not die rolls. Not even in passing.
-Not even as part of a verbatim player quote. If a player said "I've got 16 HP left"
-or "that was 22 damage", those are table-talk, not story. Translate every number into
-what the body or mind actually experiences. A number that reaches the page is a failure.
-
-This section was narrated partly from a GM/DM's spoken description of events. Do NOT
-carry any of that framing into the prose:
-
-- The narrator experiences the world directly. There is no "the DM told us" or "the GM
-  described" or "we were informed by the narrator." The world simply is, and the
-  character perceives it.
-- NPCs speak. Their dialogue is heard, not relayed. Never write "the DM said [NPC]
-  told us X" — write what the NPC said, or what the narrator heard.
-- All mechanical language must be converted to narrative consequence:
-    BAD: "she failed her saving throw against the DC 15 Wisdom check"
-    GOOD: "she flinched, something behind her eyes going distant and soft"
-    BAD: "he took 14 piercing damage and dropped to 7 HP"
-    GOOD: "the bolt punched through his shoulder and he went down hard"
-    BAD: "I used my last spell slot"
-    GOOD: "there was nothing left — whatever I had in me, I had already spent it"
-- Game mechanic instructions ("Roll a DC-14 Wisdom saving throw", "Make a Dexterity
-  check", "Roll for initiative") mark the moment a challenge arrives — they are NOT
-  prose. Translate them to what the character experiences in that instant:
-    BAD:  "Roll a DC-14 Wisdom saving throw."
-    BAD:  "*Roll a DC-14 Wisdom saving throw.*"
-    GOOD: "Something pressed against my mind — cold, insistent, trying to get in."
-    GOOD: "My focus narrowed to a single point. Hold. Just hold."
-  Never reproduce the instruction in any form, italicised or otherwise.
-- DC numbers are difficulty, not prose. Translate them by scale:
-    DC 10 or below → a routine effort, something that costs focus but little else
-    DC 14–15       → a hard push, real resistance, the outcome genuinely uncertain
-    DC 20          → near the edge of what a person can do; draining, costly
-    DC 25+         → the kind of thing that leaves a mark; almost impossible
-  Translate the ability or skill into the thing it actually represents:
-    Wisdom / Will   → clarity under pressure, holding the self together, not flinching
-    Intelligence    → recall, deduction, the mind working fast under duress
-    Charisma        → force of presence, the voice that cuts through, force of will
-    Strength        → raw physical effort, the body pushed to its limit
-    Dexterity       → speed, precision, the body moving before the mind catches up
-    Constitution    → endurance, absorbing punishment, staying on your feet
-    Skill checks    → the specific act: a Stealth check is breath held and footfall
-                      controlled; an Athletics check is muscle and will against weight;
-                      a Persuasion check is every ounce of personality directed at one person
-    BAD: "Roll a DC-14 Wisdom saving throw."
-    GOOD: "Something in her pressed back — the part that stays calm when everything
-           else is coming apart. It held. Barely."
-- "Turn" language reflects the rhythm of combat — not a game mechanic. Translate:
-    "my turn"            → my moment, when the opening came, when I had room to act
-    "end of my turn"     → when the moment passed, when I had a breath, before I moved again
-    "next turn"          → the next time I had an opening, when I got my footing back
-    "saving throw at     → waiting for the condition to break — enduring it, holding on
-     end of my turn"       until I could shake it or someone reached me
-    BAD:  "I waited for the end of my turn. The fear would break then."
-    GOOD: "I held my ground and waited for the feeling to pass — the cold clutch of it
-           loosening beat by beat until I could think straight again and move."
-- Damage amounts reflect the wearing down of endurance, focus, and defenses — not literal
-  flesh wounds. Scale the narrative weight to the number, with no blood or gore:
-    1–10   → glancing, absorbed, barely registers — a bruise through armor, a scrape,
-              something shaken off without breaking stride
-    10–20  → real impact, felt through the defenses — a hard hit that costs something,
-              the kind that makes you adjust, tighten up, recalculate
-    20–40  → serious — a blow that takes a chunk out of what's left, the body or mind
-              warning that there isn't much margin remaining
-    40+    → brutal — the kind of hit that drops lesser creatures outright; for a typed
-              source (necrotic drain, dragon breath, fireball, cold, lightning) it is
-              acceptable to describe pain, suffering, or the specific sensation of that
-              damage type — the burning, the cold seeping in, the vital energy being pulled
-              away — but keep it visceral rather than gory
-  Examples:
-    BAD:  "She took 48 points of bludgeoning damage."
-    BAD:  "The attack dealt 8 damage."
-    GOOD (8 damage):  "The blow landed but didn't bite deep — she'd felt worse."
-    GOOD (22 damage): "That one got through. Something cracked — not broke, but the margin
-                       was shrinking."
-    GOOD (48 damage, bludgeoning): "The impact was enormous. The kind that doesn't just
-                       hurt — it reorganizes your understanding of what hurt means."
-    GOOD (48 damage, necrotic): "Something cold and wrong moved through her — not pain
-                       exactly, more like absence, like warmth being taken rather than
-                       heat being applied. She could feel what it was pulling away."
-- When a player states remaining HP ("I've got 18 hit points left of 44"), translate this
-  to the character's felt condition — never mention the number. The threshold that matters
-  is whether they're likely to survive the next serious hit:
-      < 10 HP  → on the verge of collapse; barely standing; the next solid hit ends it;
-                  running on instinct and survival reflex alone
-      10–19 HP → the edge; one more bad round and it's over; the character knows this —
-                  it changes how they move, what risks they take, how much they're pushing
-                  through rather than fighting clean
-      20–35 HP → worn down, feeling it, the hits have accumulated — but there's still
-                  margin; they can take more, though not much more
-      35+ HP   → hurt but functional; the fight has cost something real but the reserve
-                  is still there
-  A player saying "I think I can take one more round of hits" is the character doing
-  internal triage — counting what's left and knowing the answer isn't comfortable.
-  Render that calculation, not the arithmetic.
-      BAD:  "I had 18 hit points remaining."
-      BAD:  "I was at less than half health."
-      GOOD (18 HP): "I was still on my feet. Barely. One more round like that and I
-                     wouldn't be."
-      GOOD (8 HP):  "I was running on something that wasn't quite strength anymore —
-                     reflex, maybe, or the body's last argument against stopping."
-- When a character rolls a critical success (natural 20) on an ABILITY CHECK or SKILL
-  CHECK — not an attack roll — the narration should reflect that something exceptional
-  happened, not just that it worked. This is the moment where everything clicked: the
-  body moved perfectly, the mind was razor-sharp, the words landed exactly right. The
-  character should feel it — the rare, clean sensation of having absolutely nailed
-  something. Not lucky. Not barely. Definitively.
-    BAD: "I picked the lock." (success but flat)
-    BAD: "I managed to persuade her." (success but flat)
-    GOOD: "My fingers found the tumblers before I even thought about it — the lock gave
-           like it had been waiting for me. I almost laughed."
-    GOOD: "I said the right thing. I knew it the moment it left my mouth — the exact
-           word, the exact weight. I could see it land."
-- Dice rolls, attack rolls, spell slots, challenge ratings, and game statistics have no
-  place in this prose. Replace every one of them with what the character would actually
-  experience, feel, or observe.
-- DM scene descriptions are the world as the character PERCEIVES it — not commentary
-  from a narrator standing outside the story. When the source material contains the DM
-  setting a scene ("the hall is dark, torches sputtering, the smell of blood in the
-  air"), render it as direct sensory experience:
-    BAD:  "the DM described a dark hall with guttering torches"
-    BAD:  "we were told the air smelled of blood"
-    GOOD: "the torches had gone out, and the dark pressed in; the smell hit me first"
-- DM/GM narrating an in-fiction action or NPC state is fictional truth — never
-  attribute it to the DM as a speaker. When the source has "the DM said she was
-  convinced" or "the DM announced combat begins" or "the DM confirmed the deception
-  sold", render the fact directly in the world. The DM is not a character. Treat
-  these as the world simply being that way:
-    BAD:  "The DM confirmed her sincerity."
-    BAD:  "The DM said, with a touch of grim humor, that Uncle Joon was dead."
-    BAD:  "'Bob rushes the dragon,' the DM announced, and the battle was on."
-    GOOD: "She meant it. I could see that — the way her hands had gone still."
-    GOOD: "Uncle Joon was dead. Whatever he had been about to tell me went with him."
-    GOOD: "Bob hit the dragon shoulder-first and the room broke open."
-  Rule: if the source line begins "the DM/GM [verb]" and the verb is about the
-  fiction (said, announced, confirmed, revealed, explained, told us, decided),
-  the line is fictional truth — render the truth, drop the attribution.
-- DM dramatic framing is the character's emotional reality — not a narrator's
-  commentary on the significance of events. When the source material contains the DM
-  building stakes or emotional weight ("this isn't just a fight — she is everything
-  you've been fighting toward"), render it as what the character FEELS in that moment:
-    BAD:  "the encounter was described as momentous"
-    BAD:  "the narrator told us this enemy was significant"
-    GOOD: "something in my chest understood, before my mind caught up, that this was
-           what all of it had been building toward"
-- GM/DM out-of-character remarks — table banter, reactions to player jokes, meta-commentary,
-  anything the GM says as a person at the table rather than as a narrator or NPC voice — are
-  cut entirely. They have no narrative equivalent. Do not paraphrase them, attribute them,
-  or let them leave a trace in the prose. If the GM laughs at a player's quip, that laugh
-  does not exist in the story.
-    BAD:  "The GM, to his credit, said he hoped more pleasantly."
-    BAD:  "Kostadis laughed."
-    GOOD: [the line simply does not appear]
-  The rule of thumb: if a GM line is responding to a player — rather than describing the
-  world or voicing an NPC — it gets cut.
-- Speaker labels such as "GM (Kostadis)", "DM (Kostadis)", "GM (Name)", "DM (Name)",
-  "Kostadis (GM)", or "Kostadis (DM)" all identify the game master's out-of-character
-  voice. GM and DM are the same role — the same person. Never reference these people by name in the prose
-  — not as players, not as someone who "handed" or "told" the narrator something, not in
-  any form. The narrator does not receive information from a person at the table. They
-  simply know, perceive, or realize the thing. Tactical explanations become instinct or
-  calculation. Scene-setting becomes direct sensory experience. The real person's name
-  must not appear in the output.\
-"""
+PROSE_MODE_INSTRUCTION = load_agent_prompt("session_doc/narrate/prose_mode")
 
 
-SCENE_ANCHORED_DIRECTIVE = """\
-NARRATOR FOCUS — the moments below are SCENE-LEVEL, not pre-filtered to one character.
-They capture the whole scene as it happened around everyone present. Your job is to
-render that scene through {narrator}'s eyes specifically:
-- Foreground what {narrator} said, did, noticed, and felt — give those beats weight.
-- Other characters' actions are visible only as {narrator} would experience them
-  — what they saw, heard, or reacted to. No internal monologue for anyone but {narrator}.
-- Every verbatim quote in the moments belongs in the prose, even when {narrator} did
-  not speak it — they were there, they heard it, render it as heard.
-- Do not narrate from an omniscient camera. Stay in {narrator}'s body and point of view.\
-"""
+SCENE_ANCHORED_DIRECTIVE = load_agent_prompt("session_doc/narrate/scene_anchored")
 
 
 def build_narrate_system(examples_text: str | None, scene: str | None = None,
