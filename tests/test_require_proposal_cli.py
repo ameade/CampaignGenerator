@@ -129,12 +129,12 @@ class TestSessionDocRequireProposal:
     def test_missing_proposal_refused(self, tmp_path: Path):
         recap = tmp_path / "recap.md"
         recap.write_text("recap", encoding="utf-8")
-        out = tmp_path / "out.md"
+        out_dir = tmp_path / "narration"
         result = _run(
             [
                 sys.executable, str(REPO_ROOT / "session_doc.py"),
                 str(recap),
-                "--output", str(out),
+                "--per-scene-output", str(out_dir),
                 "--campaign-dir", str(tmp_path),
                 "--require-proposal",
             ]
@@ -150,7 +150,7 @@ class TestSessionDocRequireProposal:
             [
                 sys.executable, str(REPO_ROOT / "session_doc.py"),
                 str(recap),
-                "--output", str(tmp_path / "out.md"),
+                "--per-scene-output", str(tmp_path / "narration"),
                 "--campaign-dir", str(tmp_path),
                 "--require-proposal",
             ]
