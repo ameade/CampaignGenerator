@@ -249,6 +249,7 @@ def merge_facts_embed(
 def run_unit(
     input_path: Path, pass_spec: dict, k: int, samples: int, workdir: Path,
     endpoint: str | None, model: str | None,
+    register_proc=None, is_cancelled=None,
 ) -> tuple[str, list[dict] | None, str | None]:
     """Run ONE (lens, sample) unit on `endpoint`. Returns (key, facts, error).
 
@@ -257,6 +258,11 @@ def run_unit(
     verbatim, so an interrupted/resumed run skips finished units instantly.
     Each sample has its own cache dir so a resume does not collapse the samples
     into one identical cached result.
+
+    `register_proc(proc)`, if given, is called with the live `Popen` the moment
+    the subprocess starts, so the dispatcher can terminate a losing speculative
+    copy. `is_cancelled()`, if given, is polled just before launch — if the unit
+    has already been won by another endpoint we skip spawning entirely.
     """
     name = pass_spec["name"]
     single = samples == 1
@@ -289,13 +295,22 @@ def run_unit(
         cmd += ["--model", model]
 
     where = endpoint or "default endpoint"
+    if is_cancelled and is_cancelled():
+        return key, None, f"pass {name!r} sample {k}: cancelled before launch"
     print(f"  [start ] {label:20s} -> {where}")
-    result = subprocess.run(cmd, capture_output=True, text=True)
-    if result.returncode != 0:
-        tail = "\n    ".join((result.stderr or "").strip().splitlines()[-3:])
+    proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+    if register_proc:
+        register_proc(proc)
+    _, stderr = proc.communicate()
+    if proc.returncode != 0:
+        # A non-zero exit is either a genuine failure (bad chunk) or a
+        # speculative loser that the dispatcher terminated. The dispatcher
+        # drops the error if the unit is already settled, so we report both
+        # the same way here.
+        tail = "\n    ".join((stderr or "").strip().splitlines()[-3:])
         return key, None, (
             f"pass {name!r} sample {k} on {where} failed (exit "
-            f"{result.returncode}); fix the failing chunk in {extract_dir} "
+            f"{proc.returncode}); fix the failing chunk in {extract_dir} "
             f"and re-run.\n    {tail}"
         )
     try:
@@ -304,6 +319,30 @@ def run_unit(
         return key, None, f"pass {name!r} sample {k}: cannot read {output_path}: {e}"
     print(f"  [done  ] {label:20s} {len(facts):>3} facts  ({where})")
     return key, facts, None
+
+
+def pick_straggler(inflight: dict, settled: set, now: float,
+                   min_age: float, max_copies: int) -> str | None:
+    """Return the key of the longest-running in-flight unit eligible for a
+    speculative duplicate, or None.
+
+    Eligible = not yet settled, currently running on fewer than `max_copies`
+    endpoints, and running for at least `min_age` seconds (so freshly-started
+    units are never needlessly duplicated). Picking the OLDEST eligible unit
+    targets the actual tail straggler. Pure function — all mutation of the
+    in-flight bookkeeping happens in the caller under the lock.
+    """
+    cands = [
+        (info["start"], key)
+        for key, info in inflight.items()
+        if key not in settled
+        and info["copies"] < max_copies
+        and (now - info["start"]) >= min_age
+    ]
+    if not cands:
+        return None
+    cands.sort()
+    return cands[0][1]
 
 
 def main() -> None:
@@ -352,6 +391,22 @@ def main() -> None:
                              "else extract_facts.py's default). All endpoints must "
                              "serve this same model id, since the merge treats "
                              "their facts uniformly.")
+    parser.add_argument("--speculative", action=argparse.BooleanOptionalAction,
+                        default=True,
+                        help="Speculative re-execution / straggler mitigation "
+                             "(default ON, needs 2+ endpoints). When the work "
+                             "queue drains but a unit is still running on a slow "
+                             "endpoint, a free endpoint re-runs that straggler and "
+                             "the run takes whichever copy finishes first (the "
+                             "loser is terminated). Stops the tail of a run waiting "
+                             "1h+ on one starved Spark. Use --no-speculative for "
+                             "attended runs where you may grab a Spark mid-job and "
+                             "prefer to just wait the unit out.")
+    parser.add_argument("--spec-min-age", type=float, default=60.0, metavar="SEC",
+                        help="Only speculatively duplicate a unit that has already "
+                             "been running this many seconds (default 60). Guards "
+                             "against duplicating units that are merely normal-slow, "
+                             "not stalled.")
     parser.add_argument("--embed-endpoint", default=os.environ.get("EMBED_ENDPOINT"),
                         metavar="URL",
                         help="OpenAI-compatible /v1/embeddings endpoint (e.g. "
@@ -409,30 +464,112 @@ def main() -> None:
           f"sample(s)) across {len(endpoints)} endpoint(s)")
     print("=" * 70)
 
+    MAX_COPIES = 2          # original + at most one speculative duplicate
+    POLL = 2.0              # seconds a free worker waits before re-checking
+    speculative = args.speculative and len(endpoints) > 1
+    if args.speculative and len(endpoints) > 1:
+        print(f"Speculative re-execution: ON (min-age {args.spec_min_age:.0f}s)")
+    elif args.speculative:
+        print("Speculative re-execution: off (needs 2+ endpoints)")
+    else:
+        print("Speculative re-execution: disabled (--no-speculative)")
+
+    total = len(units)
     work = queue.Queue()
     for u in units:
         work.put(u)
     results: dict[str, list[dict]] = {}
-    errors: list[str] = []
+    errors_by_key: dict[str, list[str]] = {}
+    settled: set[str] = set()        # keys with a successful result
+    failed: set[str] = set()         # keys with a real (non-loser) error, not settled
+    cancelled: set[str] = set()      # keys won elsewhere — losers skip/abort
+    inflight: dict[str, dict] = {}   # key -> {start, copies, procs, unit}
     lock = threading.Lock()
+
+    def next_task(endpoint: str | None):
+        """Decide what a now-free `endpoint` should do, under the lock.
+
+        Returns ("run", pass_spec, k, key, is_spec) | ("wait",) | ("stop",).
+        Fresh queued work always wins; only once the queue is empty do we
+        consider a speculative duplicate of the tail straggler.
+        """
+        with lock:
+            try:
+                pass_spec, k = work.get_nowait()
+                key = f"{pass_spec['name']}#{k}"
+                inflight[key] = {"start": time.time(), "copies": 1,
+                                 "procs": set(), "unit": (pass_spec, k)}
+                return ("run", pass_spec, k, key, False)
+            except queue.Empty:
+                pass
+            if not speculative:
+                return ("stop",)                 # old behaviour: free worker exits
+            if len(settled) + len(failed) >= total:
+                return ("stop",)
+            key = pick_straggler(inflight, settled, time.time(),
+                                 args.spec_min_age, MAX_COPIES)
+            if key is not None:
+                info = inflight[key]
+                info["copies"] += 1
+                pass_spec, k = info["unit"]
+                return ("run", pass_spec, k, key, True)
+            return ("wait",)                     # nothing to do yet — not done
 
     def worker(endpoint: str | None) -> None:
         while True:
-            try:
-                pass_spec, k = work.get_nowait()
-            except queue.Empty:
+            action = next_task(endpoint)
+            if action[0] == "stop":
                 return
+            if action[0] == "wait":
+                time.sleep(POLL)
+                continue
+            _, pass_spec, k, key, is_spec = action
+            if is_spec:
+                with lock:
+                    age = time.time() - inflight[key]["start"] if key in inflight else 0
+                print(f"  [spec  ] re-run straggler {key:18s} -> "
+                      f"{endpoint or 'default'} (age {age:.0f}s)")
+
+            myproc: dict = {"p": None}
+
+            def register(p, _key=key):
+                myproc["p"] = p
+                with lock:
+                    info = inflight.get(_key)
+                    if info is not None:
+                        info["procs"].add(p)
+
             try:
-                key, facts, err = run_unit(
-                    input_path, pass_spec, k, args.samples, workdir, endpoint, model)
+                _, facts, err = run_unit(
+                    input_path, pass_spec, k, args.samples, workdir, endpoint, model,
+                    register_proc=register, is_cancelled=lambda _key=key: _key in cancelled)
             except Exception as e:  # a worker must never die silently
-                key, facts, err = f"{pass_spec['name']}#{k}", None, repr(e)
+                facts, err = None, repr(e)
+
             with lock:
+                info = inflight.get(key)
+                p = myproc["p"]
+                if info is not None:
+                    if p is not None:
+                        info["procs"].discard(p)
+                    info["copies"] -= 1
+                    if info["copies"] <= 0 and not info["procs"]:
+                        inflight.pop(key, None)
                 if err:
-                    errors.append(err)
-                else:
+                    if key not in settled:       # a settled key's error = killed loser
+                        errors_by_key.setdefault(key, []).append(err)
+                        failed.add(key)
+                elif key not in settled:
                     results[key] = facts
-            work.task_done()
+                    settled.add(key)
+                    failed.discard(key)
+                    cancelled.add(key)           # tell any other copy it has lost
+                    if info is not None:         # terminate the straggler we just beat
+                        for loser in list(info["procs"]):
+                            try:
+                                loser.terminate()
+                            except Exception:
+                                pass
 
     t0 = time.time()
     threads = [threading.Thread(target=worker, args=(ep,), daemon=True)
@@ -443,9 +580,11 @@ def main() -> None:
         t.join()
     elapsed = time.time() - t0
 
-    if errors:
-        print(f"\n{len(errors)} unit(s) failed:", file=sys.stderr)
-        for e in errors:
+    real_errors = [e for key in failed if key not in settled
+                   for e in errors_by_key.get(key, [])]
+    if real_errors:
+        print(f"\n{len(real_errors)} unit(s) failed:", file=sys.stderr)
+        for e in real_errors:
             print(f"  ERROR: {e}", file=sys.stderr)
         sys.exit(1)
 
