@@ -996,7 +996,19 @@ class _OpenAICompatClient:
         base_url = endpoint.rstrip("/")
         if not base_url.endswith("/v1"):
             base_url = base_url + "/v1"
-        self.oai = OpenAI(base_url=base_url, api_key=api_key)
+        # Explicit timeouts. A local vLLM box that is wedged, overloaded, or —
+        # the case that actually bit us — frozen by a host sleep leaves the TCP
+        # socket half-open: the peer is gone, no RST ever arrives, and a blocked
+        # read() never returns, so the call hangs forever. A read timeout makes a
+        # stalled/stale connection raise httpx.ReadTimeout (which stream_api
+        # treats as retryable and reopens on a fresh socket) in minutes, not
+        # never. Read budget is deliberately generous — token-to-token gaps are
+        # sub-second, so 300s only fires on a genuinely dead stream; connect
+        # fails fast. Override the read budget with DGX_READ_TIMEOUT.
+        import httpx
+        read_timeout = float(os.environ.get("DGX_READ_TIMEOUT", "300"))
+        timeout = httpx.Timeout(connect=10.0, read=read_timeout, write=30.0, pool=30.0)
+        self.oai = OpenAI(base_url=base_url, api_key=api_key, timeout=timeout)
         self.model_override = model_override or os.environ.get("DGX_MODEL") or DGX_DEFAULT_MODEL
         self.messages = _OpenAICompatMessages(self)
 
