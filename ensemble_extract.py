@@ -249,15 +249,20 @@ def merge_facts_embed(
 def run_unit(
     input_path: Path, pass_spec: dict, k: int, samples: int, workdir: Path,
     endpoint: str | None, model: str | None,
-    register_proc=None, is_cancelled=None,
-) -> tuple[str, list[dict] | None, str | None]:
-    """Run ONE (lens, sample) unit on `endpoint`. Returns (key, facts, error).
+    register_proc=None, is_cancelled=None, timeout: float | None = None,
+) -> tuple[str, list[dict] | None, str | None, bool]:
+    """Run ONE (lens, sample) unit on `endpoint`.
 
-    `key` is f"{lens}#{k}". On success `error` is None; on failure `facts` is
-    None and `error` describes it. A completed, parseable unit output is reused
-    verbatim, so an interrupted/resumed run skips finished units instantly.
-    Each sample has its own cache dir so a resume does not collapse the samples
-    into one identical cached result.
+    Returns (key, facts, error, timed_out). `key` is f"{lens}#{k}". On success
+    `error` is None; on failure `facts` is None and `error` describes it.
+    `timed_out` is True only when the subprocess exceeded `timeout` and was
+    killed — the dispatcher re-queues those (a degraded endpoint usually
+    recovers on a fresh connection) rather than failing the whole run.
+
+    A completed, parseable unit output is reused verbatim, so an
+    interrupted/resumed run skips finished units instantly. Each sample has its
+    own cache dir so a resume does not collapse the samples into one identical
+    cached result.
 
     `register_proc(proc)`, if given, is called with the live `Popen` the moment
     the subprocess starts, so the dispatcher can terminate a losing speculative
@@ -276,7 +281,7 @@ def run_unit(
         try:
             facts = json.loads(output_path.read_text(encoding="utf-8"))
             print(f"  [cached] {label:20s} {len(facts):>3} facts")
-            return key, facts, None
+            return key, facts, None, False
         except json.JSONDecodeError:
             pass  # corrupt/partial — regenerate below
 
@@ -296,12 +301,25 @@ def run_unit(
 
     where = endpoint or "default endpoint"
     if is_cancelled and is_cancelled():
-        return key, None, f"pass {name!r} sample {k}: cancelled before launch"
+        return key, None, f"pass {name!r} sample {k}: cancelled before launch", False
     print(f"  [start ] {label:20s} -> {where}")
     proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
     if register_proc:
         register_proc(proc)
-    _, stderr = proc.communicate()
+    try:
+        _, stderr = proc.communicate(timeout=timeout)
+    except subprocess.TimeoutExpired:
+        # The endpoint is dribbling tokens or wedged. Kill this copy and tell
+        # the dispatcher to re-queue the unit — do NOT let it block forever.
+        proc.kill()
+        try:
+            proc.communicate(timeout=30)
+        except subprocess.TimeoutExpired:
+            pass
+        return key, None, (
+            f"pass {name!r} sample {k} on {where} exceeded {timeout:.0f}s "
+            f"wall-clock and was killed"
+        ), True
     if proc.returncode != 0:
         # A non-zero exit is either a genuine failure (bad chunk) or a
         # speculative loser that the dispatcher terminated. The dispatcher
@@ -312,13 +330,13 @@ def run_unit(
             f"pass {name!r} sample {k} on {where} failed (exit "
             f"{proc.returncode}); fix the failing chunk in {extract_dir} "
             f"and re-run.\n    {tail}"
-        )
+        ), False
     try:
         facts = json.loads(output_path.read_text(encoding="utf-8"))
     except (OSError, json.JSONDecodeError) as e:
-        return key, None, f"pass {name!r} sample {k}: cannot read {output_path}: {e}"
+        return key, None, f"pass {name!r} sample {k}: cannot read {output_path}: {e}", False
     print(f"  [done  ] {label:20s} {len(facts):>3} facts  ({where})")
-    return key, facts, None
+    return key, facts, None, False
 
 
 def pick_straggler(inflight: dict, settled: set, now: float,
@@ -407,6 +425,17 @@ def main() -> None:
                              "been running this many seconds (default 60). Guards "
                              "against duplicating units that are merely normal-slow, "
                              "not stalled.")
+    parser.add_argument("--unit-timeout", type=float, default=600.0, metavar="SEC",
+                        help="Per-unit wall-clock cap (default 600). A unit whose "
+                             "subprocess exceeds this is killed and re-queued — a "
+                             "degraded endpoint that dribbles tokens toward "
+                             "max_tokens usually recovers on a fresh connection, "
+                             "and a re-queued unit can land on the healthy box. "
+                             "After --unit-retries timeouts the unit fails the run. "
+                             "0 disables the cap (unbounded — the old behaviour).")
+    parser.add_argument("--unit-retries", type=int, default=3, metavar="N",
+                        help="Max times a single unit may time out and be re-queued "
+                             "before it fails the run (default 3).")
     parser.add_argument("--embed-endpoint", default=os.environ.get("EMBED_ENDPOINT"),
                         metavar="URL",
                         help="OpenAI-compatible /v1/embeddings endpoint (e.g. "
@@ -466,6 +495,7 @@ def main() -> None:
 
     MAX_COPIES = 2          # original + at most one speculative duplicate
     POLL = 2.0              # seconds a free worker waits before re-checking
+    unit_timeout = args.unit_timeout if args.unit_timeout > 0 else None
     speculative = args.speculative and len(endpoints) > 1
     if args.speculative and len(endpoints) > 1:
         print(f"Speculative re-execution: ON (min-age {args.spec_min_age:.0f}s)")
@@ -473,6 +503,11 @@ def main() -> None:
         print("Speculative re-execution: off (needs 2+ endpoints)")
     else:
         print("Speculative re-execution: disabled (--no-speculative)")
+    if unit_timeout:
+        print(f"Per-unit timeout: {unit_timeout:.0f}s "
+              f"(re-queue up to {args.unit_retries}x on timeout)")
+    else:
+        print("Per-unit timeout: disabled (unbounded)")
 
     total = len(units)
     work = queue.Queue()
@@ -483,6 +518,7 @@ def main() -> None:
     settled: set[str] = set()        # keys with a successful result
     failed: set[str] = set()         # keys with a real (non-loser) error, not settled
     cancelled: set[str] = set()      # keys won elsewhere — losers skip/abort
+    timeouts: dict[str, int] = {}    # key -> how many times it has timed out
     inflight: dict[str, dict] = {}   # key -> {start, copies, procs, unit}
     lock = threading.Lock()
 
@@ -497,8 +533,15 @@ def main() -> None:
             try:
                 pass_spec, k = work.get_nowait()
                 key = f"{pass_spec['name']}#{k}"
-                inflight[key] = {"start": time.time(), "copies": 1,
-                                 "procs": set(), "unit": (pass_spec, k)}
+                info = inflight.get(key)
+                if info is not None:
+                    # A re-queued (previously timed-out) unit whose earlier copy
+                    # may still be winding down — add a copy, keep the older
+                    # start so it stays straggler-eligible.
+                    info["copies"] += 1
+                else:
+                    inflight[key] = {"start": time.time(), "copies": 1,
+                                     "procs": set(), "unit": (pass_spec, k)}
                 return ("run", pass_spec, k, key, False)
             except queue.Empty:
                 pass
@@ -540,11 +583,12 @@ def main() -> None:
                         info["procs"].add(p)
 
             try:
-                _, facts, err = run_unit(
+                _, facts, err, timed_out = run_unit(
                     input_path, pass_spec, k, args.samples, workdir, endpoint, model,
-                    register_proc=register, is_cancelled=lambda _key=key: _key in cancelled)
+                    register_proc=register, is_cancelled=lambda _key=key: _key in cancelled,
+                    timeout=unit_timeout)
             except Exception as e:  # a worker must never die silently
-                facts, err = None, repr(e)
+                facts, err, timed_out = None, repr(e), False
 
             with lock:
                 info = inflight.get(key)
@@ -555,7 +599,18 @@ def main() -> None:
                     info["copies"] -= 1
                     if info["copies"] <= 0 and not info["procs"]:
                         inflight.pop(key, None)
-                if err:
+                if timed_out and key not in settled:
+                    # A degraded endpoint, not a bad chunk. Re-queue the unit up
+                    # to --unit-retries times; only then does it fail the run.
+                    timeouts[key] = timeouts.get(key, 0) + 1
+                    if timeouts[key] <= args.unit_retries:
+                        print(f"  [retry ] {key:18s} timed out "
+                              f"({timeouts[key]}/{args.unit_retries}) — re-queued")
+                        work.put((pass_spec, k))
+                    else:
+                        errors_by_key.setdefault(key, []).append(err)
+                        failed.add(key)
+                elif err:
                     if key not in settled:       # a settled key's error = killed loser
                         errors_by_key.setdefault(key, []).append(err)
                         failed.add(key)
