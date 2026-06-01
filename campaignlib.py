@@ -747,6 +747,82 @@ def load_file_optional(path: str | Path, label: str = "file") -> str | None:
     return p.read_text(encoding="utf-8")
 
 
+# ── Agent prompt loader ───────────────────────────────────────────────────────
+
+_PROMPT_CACHE: dict[Path, str] = {}
+
+
+def _clear_prompt_cache() -> None:
+    """Wipe the in-process prompt cache. Test-only helper."""
+    _PROMPT_CACHE.clear()
+
+
+def load_agent_prompt(
+    name: str,
+    base_dir: Path | None = None,
+    placeholders: dict[str, str] | None = None,
+) -> str:
+    """Load a prompt template from ``config/agents/<name>.md``.
+
+    Resolution order: ``base_dir`` (or CWD if unset) → repo's ``config/agents/``.
+    A campaign that wants to override a prompt drops its own file in either
+    location and the loader picks it up without forking the repo.
+
+    Placeholder substitution is opt-in (``placeholders=None`` returns the
+    template verbatim) and strict on both sides: every ``{key}`` in the
+    template must appear in ``placeholders``, and every key in
+    ``placeholders`` must appear in the template. Either mismatch raises
+    ``ValueError`` so prompt drift surfaces loudly instead of silently
+    producing a malformed prompt.
+
+    File contents are cached per absolute path for the life of the process.
+    """
+    rel = Path("config/agents") / f"{name}.md"
+    override_root = Path(base_dir) if base_dir is not None else Path.cwd()
+    repo_root = Path(__file__).resolve().parent
+    candidates = [override_root / rel, repo_root / rel]
+
+    chosen: Path | None = None
+    for cand in candidates:
+        if cand.is_file():
+            chosen = cand.resolve()
+            break
+    if chosen is None:
+        tried = "\n  ".join(str(c) for c in candidates)
+        raise FileNotFoundError(
+            f"Agent prompt '{name}' not found. Looked in:\n  {tried}"
+        )
+
+    if chosen not in _PROMPT_CACHE:
+        _PROMPT_CACHE[chosen] = chosen.read_text(encoding="utf-8")
+    template = _PROMPT_CACHE[chosen]
+
+    if placeholders is None:
+        return template
+
+    from string import Formatter
+    template_keys: set[str] = set()
+    for _literal, field, _spec, _conv in Formatter().parse(template):
+        if field:
+            template_keys.add(field)
+    provided_keys = set(placeholders)
+
+    missing = template_keys - provided_keys
+    if missing:
+        raise ValueError(
+            f"Agent prompt '{name}' has unfilled placeholder(s): "
+            f"{sorted(missing)}"
+        )
+    extra = provided_keys - template_keys
+    if extra:
+        raise ValueError(
+            f"Agent prompt '{name}' was passed unused placeholder(s): "
+            f"{sorted(extra)}"
+        )
+
+    return template.format(**placeholders)
+
+
 def assemble_docs(config: dict, doc_labels: list[str], base_dir: Path | None = None) -> str:
     """Load the requested document labels from config and join them with separators.
 
@@ -964,6 +1040,23 @@ def _is_retryable(exc) -> bool:
             return True
         if isinstance(exc, anthropic.APIStatusError) and exc.status_code == 529:
             return True  # overloaded_error
+    except ImportError:
+        pass
+    try:
+        # The DGX/vLLM path goes through the openai SDK, whose exceptions are
+        # distinct from anthropic's and wrap the underlying httpx error as
+        # __cause__ (so the httpx isinstance check below does NOT catch them).
+        # Without this branch a single transient blip kills a 20-min local run.
+        import openai
+        if isinstance(exc, (
+            openai.RateLimitError,
+            openai.InternalServerError,
+            openai.APIConnectionError,   # APITimeoutError subclasses this
+            openai.APITimeoutError,
+        )):
+            return True
+        if isinstance(exc, openai.APIStatusError) and exc.status_code in (500, 502, 503, 529):
+            return True
     except ImportError:
         pass
     try:

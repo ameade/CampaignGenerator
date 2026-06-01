@@ -13,18 +13,18 @@ When debugging or extending any tool, read this file first instead of re-reading
 | `docs/campaign_state.md` | `prep.py`, `planning.py`, `party.py` | `campaign_state.py` P2 | Completed content tracker |
 | `docs/world_state.md` | `prep.py`, all tools | `distill.py` P2 | Living canon reference |
 | `docs/planning.md` | `prep.py` | `planning.py` P2 | NPC/faction prep tracker |
-| `docs/party.md` | `session_doc.py` | `party.py` P2 | Character state tracker |
+| `docs/party.md` | `sd_*.py` | `party.py` P2 | Character state tracker |
 | `summaries.md` | `campaign_state.py`, `distill.py`, `planning.py`, `party.py` | `vtt_summary.py` P2 | Session record |
-| `vtt_extractions/extract_NNN.md` | `vtt_summary.py` P2, `session_doc.py` | `vtt_summary.py` P1 | Session action/event notes |
-| `vtt_roleplay_extractions/extract_NNN.md` | `session_doc.py` P4–5 | `vtt_summary.py` P3 | Verbatim dialogue & voice |
+| `vtt_extractions/extract_NNN.md` | `vtt_summary.py` P2, `sd_*.py` | `vtt_summary.py` P1 | Session action/event notes |
+| `vtt_roleplay_extractions/extract_NNN.md` | `sd_narrate.py` | `vtt_summary.py` P3 | Verbatim dialogue & voice |
 | `distill_extractions/extract_NNN.md` | `distill.py` P2 | `distill.py` P1 | Lore extraction notes |
 | `state_extractions/extract_NNN.md` | `campaign_state.py` P2 | `campaign_state.py` P1 | Campaign state notes |
 | `planning_extractions/extract_NNN.md` | `planning.py` P2 | `planning.py` P1 | NPC/faction notes |
 | `party_extractions/extract_NNN.md` | `party.py` P2 | `party.py` P1 | Character progression notes |
 | `docs/npcs/[slug].md` | `planning.py` P2 | `planning.py --build-dossiers` | Per-NPC dossier |
-| `scene_extractions/NN_narrator_scene.md` | `session_doc.py` P5, `session_doc_ui` | `session_doc.py` P4 | Scene-specific moments |
-| `scene_extractions/plan.md` | `session_doc.py`, `session_doc_ui` | `session_doc.py` P3 | Narrator section plan |
-| `voice/[character]_voice.md` | `session_doc.py` P5 | Players (manual) | Player voice guide |
+| `scene_extractions/NN_narrator_scene.md` | `sd_narrate.py`, `server/routers/scene_editor.py` | `(deleted in PR #52)` | Scene-specific moments |
+| `scene_extractions/plan.md` | `sd_plan.py`, `server/routers/scene_editor.py` | `sd_plan.py` | Narrator section plan |
+| `voice/[character]_voice.md` | `sd_narrate.py` | Players (manual) | Player voice guide |
 | `logs/YYYY-MM-DD_HHMMSS_*.md` | — | `campaignlib.save_log()` | Archive of all API calls |
 | `tracking.txt` | `campaign_state.py` | Manual / `make_tracking.py` | Event tracking list |
 
@@ -103,7 +103,7 @@ One short paragraph: where are PCs, what is immediately at stake
 ### vtt_extractions/extract_NNN.md (Action/Event Notes)
 
 **Written by:** `vtt_summary.py` Pass 1
-**Read by:** `vtt_summary.py` Pass 2, `session_doc.py`
+**Read by:** `vtt_summary.py` Pass 2, `sd_*.py`
 **Pattern:** `extract_001.md`, `extract_002.md` (zero-padded 3-digit index)
 **One file per ~50,000 chars of VTT input**
 
@@ -128,7 +128,7 @@ One short paragraph: where are PCs, what is immediately at stake
 
 ### vtt_roleplay_extractions/extract_NNN.md (Dialogue & Voice)
 
-**Written by:** `vtt_summary.py` Pass 3
+**Written by:** `vtt_summary.py` (now sd_plan.py)
 **Read by:** `quote_ledger.py`, `enhance_recap.py`
 **Pattern:** Same as above
 
@@ -332,7 +332,7 @@ Rules:
 ### docs/party.md
 
 **Written by:** `party.py` Pass 2
-**Read by:** `session_doc.py` for character voice reference
+**Read by:** `sd_narrate.py` for character voice reference
 
 ```markdown
 ## Party Overview
@@ -375,12 +375,12 @@ Rules:
 
 ---
 
-## Session Narrative (session_doc.py)
+## Session Narrative (sd_narrate.py)
 
 ### scene_extractions/plan.md
 
-**Written by:** `session_doc.py` Pass 3
-**Read by:** `session_doc.py` Pass 4–5, `session_doc_ui`
+**Written by:** `sd_plan.py`
+**Read by:** `sd_narrate.py`, `server/routers/scene_editor.py`
 
 **Scene mode:**
 
@@ -421,8 +421,8 @@ Rules:
 ### scene_extractions/NN_narrator_scene.md (Extraction Files)
 
 **Pattern:** `01_vukradin_the_stone_giants.md`, `02_soma_the_glacier.md`
-**Written by:** `session_doc.py` Pass 4
-**Read by:** `session_doc.py` Pass 5, edited in `session_doc_ui`
+**Written by:** `sd_narrate.py`
+**Read by:** `sd_narrate.py`, edited in `server/routers/scene_editor.py`
 
 ```markdown
 tokens: 6000
@@ -449,7 +449,7 @@ Rules:
 ### voice/[character]_voice.md
 
 **Written by:** Players manually
-**Read by:** `session_doc.py` Pass 5 (injected into that character's narrator prompt only)
+**Read by:** `sd_narrate.py` (injected into that character's narrator prompt only)
 
 ```markdown
 # Vukradin's Voice

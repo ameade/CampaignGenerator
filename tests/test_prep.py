@@ -216,15 +216,6 @@ Brewbarry held the rear as rocks fell.
 - Stone Giant Leader
 """
 
-EXTRACTIONS_CHUNK1 = [
-    ("extract_001.md", 'Giant: "LEAVE OR DIE."\nVukradin: "We do not leave."'),
-]
-EXTRACTIONS_CHUNK2 = [
-    ("extract_002.md", 'Soma: "Hold on — I can reshape this."\nBrewbarry: "Then do it now!"'),
-]
-ALL_EXTRACTIONS = EXTRACTIONS_CHUNK1 + EXTRACTIONS_CHUNK2
-
-
 # ── session_doc.extract_scene_text ────────────────────────────────────────────
 
 def test_extract_scene_text_returns_target_scene():
@@ -271,17 +262,18 @@ def test_extract_scene_text_no_scenes_section():
     assert text == ""
 
 
-# ── session_doc --plan-only persists plan.md ─────────────────────────────────
+# ── sd_plan.main writes plan.md ───────────────────────────────────────────────
 
-def test_plan_only_writes_plan_md_to_per_scene_output(tmp_path, monkeypatch):
-    """--plan-only must persist plan.md so per-scene Narrate can reuse it.
+def test_sd_plan_writes_plan_md(tmp_path, monkeypatch):
+    """sd_plan.py is the post-Phase-5 successor to --plan-only: it must
+    persist plan.md so per-scene Narrate can reuse it.
 
-    Regression: the save block sat after `if args.plan_only: return`, so
-    Plan & Check produced narrators+focus in memory but never wrote them
-    to disk — per-scene Narrate then re-ran Pass 3 from scratch.
+    Regression on the old code: the save block once sat after
+    `if args.plan_only: return`, so Plan & Check produced narrators+focus
+    in memory but never wrote them to disk — per-scene Narrate then
+    re-ran Pass 3 from scratch. The new sd_plan.py always writes.
     """
-    summary = tmp_path / "session-summary.md"
-    summary.write_text("## Summary\n\nThe party climbed.\n", encoding="utf-8")
+    import sd_plan
 
     sx_dir = tmp_path / "scene_extractions"
     sx_dir.mkdir()
@@ -294,8 +286,7 @@ def test_plan_only_writes_plan_md_to_per_scene_output(tmp_path, monkeypatch):
         encoding="utf-8",
     )
 
-    nd = tmp_path / "narration_dir"
-    nd.mkdir()
+    out_path = tmp_path / "plan.md"
 
     fake_plan = (
         "## Section 1\n"
@@ -310,112 +301,27 @@ def test_plan_only_writes_plan_md_to_per_scene_output(tmp_path, monkeypatch):
         "focus: scouting the route ahead\n"
     )
 
-    monkeypatch.setattr(session_doc, "make_client", lambda **_: object())
-    monkeypatch.setattr(
-        session_doc, "stream_api",
-        lambda *a, **kw: fake_plan,
-    )
+    monkeypatch.setattr(sd_plan, "make_client", lambda **_: object())
+    monkeypatch.setattr(sd_plan, "stream_api", lambda *a, **kw: fake_plan)
 
     monkeypatch.setattr(
         sys, "argv",
         [
-            "session_doc.py", str(summary),
+            "sd_plan.py",
             "--scene-extractions", str(sx_dir),
-            "--per-scene-output", str(nd),
-            "--plan-only",
-            "--no-plan-review",
+            "--characters", "Vukradin, Soma",
+            "--out", str(out_path),
         ],
     )
 
-    session_doc.main()
+    sd_plan.main()
 
-    plan_path = nd / "plan.md"
-    assert plan_path.exists(), "plan.md must be written under --plan-only"
-    plan_text = plan_path.read_text(encoding="utf-8")
+    assert out_path.exists(), "plan.md must be written"
+    plan_text = out_path.read_text(encoding="utf-8")
     assert "narrator: Vukradin" in plan_text
     assert "narrator: Soma" in plan_text
     assert "focus: holding the line against the giants" in plan_text
     assert "focus: scouting the route ahead" in plan_text
-
-
-# ── session_doc.build_char_extract_prompt ────────────────────────────────────
-
-def _scene_section(scene_name, chunk_start=1, chunk_end=1):
-    return {"narrator": "Vukradin", "chunk_start": chunk_start,
-            "chunk_end": chunk_end, "scene": scene_name, "focus": "test"}
-
-def _chunk_section(chunk_start=1, chunk_end=2):
-    return {"narrator": "Vukradin", "chunk_start": chunk_start,
-            "chunk_end": chunk_end, "focus": "test"}
-
-
-def test_scene_mode_sends_scene_scope():
-    """Scene mode must include the recap scene text so the model knows what belongs."""
-    prompt = session_doc.build_char_extract_prompt(
-        _scene_section("The Stone Giants"),
-        ALL_EXTRACTIONS, None, recap=RECAP_WITH_SCENES
-    )
-    assert "Scene scope" in prompt
-    assert "stone giants blocking the pass" in prompt
-
-
-def test_scene_mode_sends_roleplay_extractions():
-    """Scene mode must include roleplay extractions so the model has verbatim dialogue."""
-    prompt = session_doc.build_char_extract_prompt(
-        _scene_section("The Stone Giants"),
-        ALL_EXTRACTIONS, None, recap=RECAP_WITH_SCENES
-    )
-    assert "Roleplay Extractions" in prompt
-    assert "LEAVE OR DIE" in prompt
-
-
-def test_scene_mode_excludes_full_chunk_blob():
-    """The old bug: sending all chunks as one blob caused over-narration (Bug 7)."""
-    prompt = session_doc.build_char_extract_prompt(
-        _scene_section("The Stone Giants"),
-        ALL_EXTRACTIONS, None, recap=RECAP_WITH_SCENES
-    )
-    # Chunk 2 dialogue must NOT appear — it's from a different scene
-    assert "Soma reshaped the mountain" not in prompt
-    assert 'Hold on — I can reshape this' not in prompt
-
-
-def test_scene_mode_unknown_scene_falls_back_to_full_chunk():
-    """When scene text is not found, fall back gracefully (don't silently send nothing)."""
-    prompt = session_doc.build_char_extract_prompt(
-        _scene_section("Nonexistent Scene"),
-        ALL_EXTRACTIONS, None, recap=RECAP_WITH_SCENES
-    )
-    # Should fall back to the full-chunk path and still have the extractions
-    assert "Roleplay Extractions" in prompt
-    assert "LEAVE OR DIE" in prompt
-
-
-def test_scene_mode_missing_recap_falls_back_to_full_chunk():
-    """No recap provided → fall back to full chunk, not an empty prompt."""
-    prompt = session_doc.build_char_extract_prompt(
-        _scene_section("The Stone Giants"),
-        ALL_EXTRACTIONS, None, recap=""
-    )
-    assert "Roleplay Extractions" in prompt
-    assert "LEAVE OR DIE" in prompt
-
-
-def test_chunk_mode_does_not_include_scene_scope():
-    """Chunk mode should not inject scene scope — that's scene mode only."""
-    prompt = session_doc.build_char_extract_prompt(
-        _chunk_section(1, 2), ALL_EXTRACTIONS, None, recap=RECAP_WITH_SCENES
-    )
-    assert "Scene scope" not in prompt
-
-
-def test_chunk_mode_respects_chunk_boundaries():
-    """Chunk mode: only the assigned chunks are included, not the whole session."""
-    prompt = session_doc.build_char_extract_prompt(
-        _chunk_section(1, 1), ALL_EXTRACTIONS, None
-    )
-    assert "LEAVE OR DIE" in prompt        # chunk 1 — included
-    assert "reshape this" not in prompt    # chunk 2 — excluded
 
 
 # ── session_doc.parse_plan ────────────────────────────────────────────────────
@@ -507,41 +413,6 @@ def test_scene_mode_no_dialogue_instruction_allows_action_only():
     assert "no dialogue" in system.lower() or "no verbatim" in system.lower() or "no dialogue" in system.lower()
 
 
-def test_char_extract_system_does_not_mandate_dialogue():
-    """Extraction prompt must not demand dialogue — it may not exist for the scene."""
-    assert "Do not invent" in session_doc.CHAR_EXTRACT_SYSTEM
-    assert "valid output" in session_doc.CHAR_EXTRACT_SYSTEM
-
-
-# ── session_doc.extraction_filename ──────────────────────────────────────────
-
-def test_extraction_filename_with_scene():
-    name = session_doc.extraction_filename(3, "Soma", "The Whispering Glacier")
-    assert name == "03_soma_the_whispering_glacier.md"
-
-
-def test_extraction_filename_without_scene():
-    name = session_doc.extraction_filename(1, "Vukradin", "")
-    assert name == "01_vukradin.md"
-
-
-def test_extraction_filename_sortable():
-    """Index padding must keep files in order up to 99 scenes."""
-    n1 = session_doc.extraction_filename(1, "A", "Scene")
-    n9 = session_doc.extraction_filename(9, "A", "Scene")
-    n10 = session_doc.extraction_filename(10, "A", "Scene")
-    assert sorted([n10, n1, n9]) == [n1, n9, n10]
-
-
-def test_extraction_filename_slugifies_special_chars():
-    name = session_doc.extraction_filename(2, "Brewbarry", "Giants & Ice!")
-    assert " " not in name
-    assert "&" not in name
-    assert "!" not in name
-
-
-# ── extract-dir / from-extractions round-trip ─────────────────────────────────
-
 # ── scene index filtering (the --scene flag logic) ───────────────────────────
 
 def _make_sections():
@@ -562,13 +433,12 @@ def test_scene_filter_selects_correct_sections():
     assert narrators == ["Brewbarry", "Vukradin"]
 
 def test_scene_filter_preserves_original_index():
-    """The original 1-based index must be preserved so filenames stay consistent."""
+    """The original 1-based index must be preserved so per-scene filenames stay consistent."""
     sections = _make_sections()
     result = [(n, sections[n - 1]) for n in [2]]
     i, s = result[0]
     assert i == 2
-    fname = session_doc.extraction_filename(i, s["narrator"], s.get("scene", ""))
-    assert fname == "02_soma_the_glacier.md"
+    assert s["narrator"] == "Soma"
 
 def test_scene_filter_single():
     sections = _make_sections()
@@ -576,8 +446,6 @@ def test_scene_filter_single():
     assert len(result) == 1
     assert result[0][1]["narrator"] == "Brewbarry"
 
-
-# ── session_doc.parse_extraction_file ────────────────────────────────────────
 
 # ── session_doc.estimate_narration_tokens ────────────────────────────────────
 
@@ -599,53 +467,6 @@ def test_estimate_grows_with_content_length():
     long  = "**Beat**\nSomething happened. The party moved on carefully.\n" * 50
     assert session_doc.estimate_narration_tokens(long) > \
            session_doc.estimate_narration_tokens(short)
-
-
-def test_parse_extraction_file_no_header():
-    text = "**The Giants**\nVukradin: \"We do not leave.\""
-    content, tokens = session_doc.parse_extraction_file(text)
-    assert content == text
-    assert tokens is None
-
-def test_parse_extraction_file_with_tokens_header():
-    text = "tokens: 3000\n\n**The Giants**\nVukradin: \"We do not leave.\""
-    content, tokens = session_doc.parse_extraction_file(text)
-    assert tokens == 3000
-    assert "tokens:" not in content
-    assert "We do not leave" in content
-
-def test_parse_extraction_file_header_stripped_from_content():
-    text = "tokens: 2500\n\nSome extracted moments."
-    content, tokens = session_doc.parse_extraction_file(text)
-    assert content.strip() == "Some extracted moments."
-
-def test_parse_extraction_file_non_token_first_line():
-    text = "**Scene label**\ntokens: 3000\nmore content"
-    content, tokens = session_doc.parse_extraction_file(text)
-    assert tokens is None
-    assert content == text
-
-
-def test_extraction_files_can_be_reloaded(tmp_path):
-    """Files written by extraction_filename can be read back by matching the same name."""
-    sections = [
-        {"narrator": "Vukradin", "chunk_start": 1, "chunk_end": 1,
-         "scene": "The Stone Giants", "focus": "x"},
-        {"narrator": "Soma", "chunk_start": 2, "chunk_end": 2,
-         "scene": "Carving a Path", "focus": "y"},
-    ]
-    contents = ["Vukradin's extracted moments here.", "Soma's extracted moments here."]
-
-    # Simulate saving
-    for i, (section, text) in enumerate(zip(sections, contents), 1):
-        fname = session_doc.extraction_filename(i, section["narrator"], section.get("scene", ""))
-        (tmp_path / fname).write_text(text, encoding="utf-8")
-
-    # Simulate loading
-    for i, (section, expected) in enumerate(zip(sections, contents), 1):
-        fname = session_doc.extraction_filename(i, section["narrator"], section.get("scene", ""))
-        loaded = (tmp_path / fname).read_text(encoding="utf-8")
-        assert loaded == expected
 
 
 # ── campaignlib.save_log ────────────────────────────────────────────────────
@@ -676,52 +497,6 @@ def test_save_log_creates_directory(tmp_path):
     log_file = campaignlib.save_log(str(nested), [("A", "B")])
     assert log_file.exists()
     assert nested.exists()
-
-
-# ── session_doc.extract_section_text ────────────────────────────────────────
-
-RECAP_WITH_SECTIONS = """\
-## Summary
-
-The party climbed the mountain and fought giants.
-
-## Memorable Moments
-
-- Vukradin stared down a stone giant.
-- Soma transformed into an eagle.
-
-## Scenes
-
-### The Stone Giants
-Big fight here.
-
-## NPCs
-
-- Stone Giant Leader
-"""
-
-
-def test_extract_section_text_summary():
-    text = session_doc.extract_section_text(RECAP_WITH_SECTIONS, "Summary")
-    assert "climbed the mountain" in text
-    assert "Memorable Moments" not in text
-
-
-def test_extract_section_text_memorable_moments():
-    text = session_doc.extract_section_text(RECAP_WITH_SECTIONS, "Memorable Moments")
-    assert "Vukradin stared down" in text
-    assert "Soma transformed" in text
-    assert "climbed the mountain" not in text
-
-
-def test_extract_section_text_case_insensitive():
-    text = session_doc.extract_section_text(RECAP_WITH_SECTIONS, "summary")
-    assert "climbed the mountain" in text
-
-
-def test_extract_section_text_nonexistent():
-    text = session_doc.extract_section_text(RECAP_WITH_SECTIONS, "Missing Section")
-    assert text == ""
 
 
 # ── session_doc.extract_character_roster ────────────────────────────────────
@@ -1073,44 +848,5 @@ def test_build_narrate_prompt_includes_roster():
     assert "Tortle Druid 5" in result
 
 
-# ── session_doc.build_char_extract_prompt — recap context ───────────────────
-
-def test_scene_mode_includes_recap_context():
-    """Scene mode should include Summary and Memorable Moments from recap."""
-    prompt = session_doc.build_char_extract_prompt(
-        _scene_section("The Stone Giants"),
-        ALL_EXTRACTIONS, None, recap=RECAP_WITH_SCENES
-    )
-    assert "Recap Context" in prompt
-    assert "The party climbed the mountain" in prompt
-
-
-def test_scene_mode_includes_session_summary():
-    prompt = session_doc.build_char_extract_prompt(
-        _scene_section("The Stone Giants"),
-        ALL_EXTRACTIONS, None, recap=RECAP_WITH_SCENES,
-        session_summary="Session events log here."
-    )
-    assert "Session Events" in prompt
-    assert "Session events log here." in prompt
-
-
-def test_chunk_mode_includes_summary_extractions():
-    summary_exts = [("extract_001.md", "Action details chunk 1"),
-                    ("extract_002.md", "Action details chunk 2")]
-    prompt = session_doc.build_char_extract_prompt(
-        _chunk_section(1, 1), ALL_EXTRACTIONS, summary_exts
-    )
-    assert "Session Extractions" in prompt
-    assert "Action details chunk 1" in prompt
-
-
-def test_build_char_extract_prompt_includes_roster():
-    prompt = session_doc.build_char_extract_prompt(
-        _chunk_section(1, 2), ALL_EXTRACTIONS, None,
-        roster="- Vukradin: Goliath Barbarian 5"
-    )
-    assert "Character Classes" in prompt
-    assert "Goliath Barbarian 5" in prompt
 
 
