@@ -62,6 +62,13 @@ def _refresh_config_from_service(request: Request) -> None:
             continue
         config_key = _TYPED_TO_CONFIG_KEY.get(typed_key, typed_key)
         CONFIG[config_key] = value
+    # The global model lives in runtime.default_model (set by the sidebar model
+    # picker), not under ui.session_doc. Surface it as CONFIG["model"] so the
+    # command builders can forward it as --model to each pipeline script.
+    # Without this, every stage falls back to each script's hardcoded default.
+    default_model = resolved.get("runtime", {}).get("default_model")
+    if default_model:
+        CONFIG["model"] = default_model
     if "work_dir" not in CONFIG:
         CONFIG["work_dir"] = str(service.campaign_dir)
 
@@ -447,6 +454,25 @@ def _assembled_output_path() -> Path:
 
 # ── Command builders ────────────────────────────────────────────────────────
 
+def _model_args() -> list[str]:
+    """`--model <global default>` if a model is configured, else [].
+
+    Forwards the sidebar's runtime.default_model (synced into CONFIG["model"]
+    by _refresh_config_from_service) to every pipeline script, so the editor
+    stages honor the picker instead of each script's hardcoded default.
+
+    Skipped when backend == "dgx": the global picker holds an Anthropic model
+    name, which is meaningless for the DGX endpoint (that model is governed by
+    DGX_MODEL via _llm_env). It would also be actively wrong for scrub —
+    scrub_mechanics.py passes --model straight through as the OpenAI-compat
+    model_override, so a "claude-*" name there 404s against the DGX server.
+    """
+    if CONFIG.get("backend") == "dgx":
+        return []
+    model = (CONFIG.get("model") or "").strip()
+    return ["--model", model] if model else []
+
+
 def _build_enhance_cmd(batch: bool = False) -> list[str] | tuple[None, str]:
     """Stage 1: enhance_summary.py {vtt} --gmassist {session} --output {summary}.
 
@@ -470,6 +496,7 @@ def _build_enhance_cmd(batch: bool = False) -> list[str] | tuple[None, str]:
         "--gmassist", CONFIG["session"],
         "--output", str(summary),
     ]
+    cmd += _model_args()
     if batch:
         cmd.append("--batch")
     return cmd
@@ -503,6 +530,7 @@ def _build_reextract_cmd(batch: bool = False,
         "--summary", str(summary),
         "--output-dir", str(sx_dir),
     ]
+    cmd += _model_args()
     if CONFIG.get("dossier_dir"):
         cmd += ["--dossier-dir", CONFIG["dossier_dir"]]
     # Pass party.md so scene_extract.py can rewrite Zoom display names to
@@ -547,6 +575,7 @@ def _build_narrate_cmd(scene_num: int) -> list[str] | tuple[None, str]:
         "--per-scene-output", str(nd),
         "--scene", str(scene_num),
     ]
+    cmd += _model_args()
     for flag, key in [("--party", "party"), ("--voice-dir", "voice_dir"),
                       ("--characters", "characters"),
                       ("--examples", "examples_dir")]:
@@ -923,6 +952,7 @@ async def api_scrub(n: int):
             status_code=400,
         )
     cmd = [python_exe(), str(SCRIPT_DIR / "scrub_mechanics.py"), str(path)]
+    cmd += _model_args()
     if CONFIG.get("scrub_tokens"):
         cmd += ["--max-tokens", str(CONFIG["scrub_tokens"])]
 
@@ -953,6 +983,7 @@ async def api_scrub_all():
             status_code=400,
         )
     cmd = [python_exe(), str(SCRIPT_DIR / "scrub_mechanics.py"), str(nd)]
+    cmd += _model_args()
     if CONFIG.get("scrub_tokens"):
         cmd += ["--max-tokens", str(CONFIG["scrub_tokens"])]
 
@@ -995,6 +1026,7 @@ def _build_plan_cmd() -> list[str] | tuple[None, str]:
         "--plan-only",
         "--no-plan-review",
     ]
+    cmd += _model_args()
     for flag, key in [("--party", "party"), ("--voice-dir", "voice_dir"),
                       ("--characters", "characters")]:
         if CONFIG.get(key):
