@@ -122,6 +122,26 @@ Two kinds of source material follow.
    session events.
 """
 
+DOSSIER_GROUNDING = """\
+The source material below is already distilled. Synthesise it into the
+world_state document.
+
+1. ENTITY DOSSIERS — one per significant NPC, faction, location, object, or
+   monster. Each is a CURRENT-STATE summary already reconciled across the whole
+   campaign (later chapters override earlier), with a "## Uncertainty" block
+   listing what could not be confirmed. Treat the dossier body as current;
+   fold the Uncertainty items into open threads or omit them — do NOT assert an
+   uncertain claim as settled fact. A dossier's roster of "current companions"
+   may be stale (it was written from that one entity's facts); reconcile party
+   membership across dossiers and the player-character roster, not from any
+   single dossier's companion list.
+2. OPEN THREADS & MYSTERIES — recurring unresolved thread facts in chapter
+   order. Cluster related ones and surface them as the document's open
+   questions / mysteries section.
+3. PLAYER CHARACTER BACKSTORIES — campaign background to enrich party profiles,
+   not to invent events.
+"""
+
 
 def load_aliases(path: Path | None) -> dict[str, str]:
     """Load aliases.json -> flat {variant: canonical} (canonicals self-map)."""
@@ -147,6 +167,27 @@ def load_party_names(path: Path | None) -> list[str]:
         if name:
             names.append(str(name))
     return names
+
+
+_NFACTS_RE = re.compile(r"^n_facts:\s*(\d+)", re.M)
+
+
+def load_dossiers(paths: list[Path], min_facts: int) -> list[tuple[str, str]]:
+    """Read per-entity dossier .md files (facts_to_state.py output), keeping only
+    those with frontmatter n_facts >= min_facts. Returns [(label, text)] sorted
+    densest-first so the most significant entities lead the synthesis input."""
+    out: list[tuple[int, str, str]] = []
+    for p in paths:
+        try:
+            text = p.read_text(encoding="utf-8")
+        except OSError:
+            continue
+        m = _NFACTS_RE.search(text)
+        n = int(m.group(1)) if m else 0
+        if n >= min_facts:
+            out.append((n, p.stem, text))
+    out.sort(key=lambda x: -x[0])
+    return [(stem, text) for _, stem, text in out]
 
 
 def expand_globs(patterns: list[str]) -> list[Path]:
@@ -249,10 +290,24 @@ def main() -> None:
             "ensemble replaces Claude's distill_extractions as the input."
         )
     )
-    parser.add_argument("--corpus", required=True, nargs="+", metavar="GLOB",
+    parser.add_argument("--corpus", nargs="+", metavar="GLOB",
                         help="One or more globs matching merged.json files "
                              "(e.g. 'runs/*/merged.json'). Quote them so the "
-                             "shell does not expand them first.")
+                             "shell does not expand them first. Renders ALL facts; "
+                             "for large corpora prefer --dossiers + --threads.")
+    parser.add_argument("--dossiers", nargs="+", metavar="GLOB",
+                        help="Glob(s) for per-entity current-state dossiers from "
+                             "facts_to_state.py (the aggregation layer). Included "
+                             "verbatim — already compressed + human-reviewable. "
+                             "Use instead of --corpus when the raw fact corpus is "
+                             "too large for one synthesis call.")
+    parser.add_argument("--dossier-min-facts", type=int, default=0, metavar="N",
+                        help="Only include dossiers whose frontmatter n_facts >= N "
+                             "(significance floor; e.g. 20 -> the recurring entities).")
+    parser.add_argument("--threads", metavar="FILE", default=None,
+                        help="Pre-rendered threads/mysteries markdown (from "
+                             "facts_to_state.py --types thread --render-only). The "
+                             "cross-cutting material that doesn't aggregate per-entity.")
     parser.add_argument("--output", "-o", required=True, metavar="FILE",
                         help="Where to write world_state markdown. Required and "
                              "never defaulted — point at a scratch file and diff "
@@ -288,9 +343,11 @@ def main() -> None:
                              "for prompt debugging without spending tokens.")
     args = parser.parse_args()
 
-    corpus_paths = expand_globs(args.corpus)
-    if not corpus_paths:
-        print(f"Error: no merged.json files matched {args.corpus}", file=sys.stderr)
+    corpus_paths = expand_globs(args.corpus) if args.corpus else []
+    dossier_paths = expand_globs(args.dossiers) if args.dossiers else []
+    if not corpus_paths and not dossier_paths:
+        print("Error: provide --corpus and/or --dossiers (nothing matched).",
+              file=sys.stderr)
         sys.exit(1)
 
     aliases = load_aliases(
@@ -306,40 +363,62 @@ def main() -> None:
     )
     backstory_paths = expand_globs(args.backstories) if args.backstories else []
 
-    # ── Load corpus, order chronologically, render (deterministic; no LLM) ──
+    dossier_mode = bool(dossier_paths)
+    blocks: list[str] = [DOSSIER_GROUNDING if dossier_mode else GROUNDING_NOTE]
     sessions: list[tuple] = []
-    for path in corpus_paths:
-        try:
-            facts = json.loads(path.read_text(encoding="utf-8"))
-        except (json.JSONDecodeError, OSError) as exc:
-            print(f"Warning: skipping {path}: {exc}", file=sys.stderr)
-            continue
-        sessions.append((path, facts))
-    if not sessions:
-        print("Error: no readable merged.json files in corpus.", file=sys.stderr)
-        sys.exit(1)
-    if not args.preserve_order:
-        sessions.sort(key=lambda pf: session_index(pf[0]))
-
-    # Ordering is a precision decision — show it so the human can veto a
-    # mis-sort before it silently becomes "current state".
-    print("Session order (earliest → latest; the LAST session is current state):")
-    for i, (path, facts) in enumerate(sessions, 1):
-        ds = session_dates(facts)
-        print(f"  {i}. {session_label(path)}"
-              + (f"  [{'; '.join(ds)}]" if ds else "  [no in-world date]"))
-    print("=" * 60)
-
-    blocks: list[str] = [GROUNDING_NOTE, "# SESSION FACT EXTRACTS (chronological)"]
     total_facts = 0
-    for i, (path, facts) in enumerate(sessions, 1):
-        total_facts += len(facts)
-        ds = session_dates(facts)
-        date_note = f" | in-world date: {'; '.join(ds)}" if ds else ""
-        rendered = render_facts(facts, aliases, args.quotes)
-        blocks.append(
-            f"<!-- Session {i}: {session_label(path)}{date_note} -->\n\n{rendered}"
-        )
+    n_dossiers = 0
+
+    # ── Dossier track: pre-aggregated, current-state-per-entity (no LLM here) ──
+    if dossier_paths:
+        dossiers = load_dossiers(dossier_paths, args.dossier_min_facts)
+        if not dossiers:
+            print(f"Error: no dossiers matched n_facts >= {args.dossier_min_facts}.",
+                  file=sys.stderr)
+            sys.exit(1)
+        n_dossiers = len(dossiers)
+        print(f"Entity dossiers: {n_dossiers} (n_facts >= {args.dossier_min_facts}), "
+              f"densest first.")
+        blocks.append("# ENTITY DOSSIERS (current state — significant entities)")
+        for stem, text in dossiers:
+            blocks.append(f"<!-- {stem} -->\n\n{text.strip()}")
+
+    # ── Threads / mysteries track (cross-cutting; does not aggregate per-entity) ──
+    if args.threads:
+        tpath = Path(args.threads).expanduser().resolve()
+        if tpath.exists():
+            print(f"Threads track: {tpath.name}")
+            blocks.append("# OPEN THREADS & MYSTERIES (recurring, chronological)")
+            blocks.append(tpath.read_text(encoding="utf-8").strip())
+
+    # ── Corpus track: raw facts rendered per session (the original path) ──
+    if corpus_paths:
+        for path in corpus_paths:
+            try:
+                facts = json.loads(path.read_text(encoding="utf-8"))
+            except (json.JSONDecodeError, OSError) as exc:
+                print(f"Warning: skipping {path}: {exc}", file=sys.stderr)
+                continue
+            sessions.append((path, facts))
+        if not args.preserve_order:
+            sessions.sort(key=lambda pf: session_index(pf[0]))
+        # Ordering is a precision decision — show it so the human can veto a
+        # mis-sort before it silently becomes "current state".
+        print("Session order (earliest → latest; the LAST session is current):")
+        for i, (path, facts) in enumerate(sessions, 1):
+            ds = session_dates(facts)
+            print(f"  {i}. {session_label(path)}"
+                  + (f"  [{'; '.join(ds)}]" if ds else "  [no in-world date]"))
+        blocks.append("# SESSION FACT EXTRACTS (chronological)")
+        for i, (path, facts) in enumerate(sessions, 1):
+            total_facts += len(facts)
+            ds = session_dates(facts)
+            date_note = f" | in-world date: {'; '.join(ds)}" if ds else ""
+            rendered = render_facts(facts, aliases, args.quotes)
+            blocks.append(
+                f"<!-- Session {i}: {session_label(path)}{date_note} -->\n\n{rendered}"
+            )
+    print("=" * 60)
 
     if backstory_paths:
         blocks.append("# PLAYER CHARACTER BACKSTORIES")
@@ -366,8 +445,15 @@ def main() -> None:
     inv_note = f" | inventory: {inventory_path.name}" if inventory_text else ""
     pc_note = f" | party: {len(party_names)} PCs" if party_names else ""
     bs_note = f" | backstories: {len(backstory_paths)}" if backstory_paths else ""
-    print(f"[Synthesise world_state | {len(sessions)} session(s), "
-          f"{total_facts} facts | quotes: {'on' if args.quotes else 'off'} | "
+    srcs = []
+    if n_dossiers:
+        srcs.append(f"{n_dossiers} dossiers")
+    if sessions:
+        srcs.append(f"{len(sessions)} sessions/{total_facts} facts")
+    if args.threads:
+        srcs.append("threads")
+    print(f"[Synthesise world_state | {', '.join(srcs) or 'no source'} | "
+          f"quotes: {'on' if args.quotes else 'off'} | "
           f"model: {args.model}{pc_note}{inv_note}{bs_note}]")
     print(f"[Input: {len(user_prompt):,} chars]")
     print("=" * 60)
@@ -387,7 +473,7 @@ def main() -> None:
 
     print("\n" + "=" * 60)
     print(f"Wrote world_state: {output_path}")
-    print(f"Synthesised from {len(sessions)} session(s), {total_facts} facts.")
+    print(f"Synthesised from {n_dossiers} dossier(s) + {len(sessions)} session(s).")
     if party_names:
         print(f"Party anchored: {', '.join(party_names)}")
 
