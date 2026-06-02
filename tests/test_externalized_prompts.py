@@ -36,6 +36,7 @@ CASES = [
     ("campaign_state",   "EXTRACT_TRACKED_SECTION",          "campaign_state_extract_tracked"),
     ("campaign_state",   "SYNTHESIZE_SYSTEM_BASE",           "campaign_state_synthesize"),
     ("campaign_state",   "SYNTHESIZE_TRACKED_SECTION",       "campaign_state_synthesize_tracked"),
+    ("facts_to_state",   "AGGREGATE_SYSTEM",                 "state_aggregate"),
     ("narrative",        "PLAN_SYSTEM",                      "narrative/plan"),
     ("narrative",        "PLAN_SCENE_SYSTEM",                "narrative/plan_scene"),
     ("narrative",        "CHAR_EXTRACT_SYSTEM",              "narrative/char_extract"),
