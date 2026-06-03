@@ -351,9 +351,12 @@ Typical session lifecycle:
 
 [`mcp_server.py`](../../mcp_server.py) is a FastMCP stdio server registered per campaign via `.mcp.json` ([template](../../.mcp.json.template)). Reads `CAMPAIGN_DIR` from env. Tools:
 
-    - Read-only: `get_campaign_state`, `get_world_state`, `get_planning`, `get_mechanics`, `get_party`, `read_document`, `search_document`, `list_sessions`, `list_files`, `list_notes`, `search_document_aliases`
-- Write: `write_note` (only into `<campaign_dir>/notes/`)
-- Semantic search: passes through to `mempalace.searcher.search_memories()` if MemPalace is installed
+- Read-only document access: `read_document`, `search_document`, `list_sessions`, `list_files`, `list_notes`
+- Write (into `<campaign_dir>/notes/` only): `write_note`, `append_note`
+- Search / retrieval: `quick_search`, `grounded_search`, `query_lore` (mempalace index over session summaries), `rpg_search` (RLM tiered retrieval), `arc_triggers` (arc-score trigger candidates from the chronicle wing)
+- Generation: `session_prep` (beat → encounter doc), `generate_npc_table`
+- RLM proposal / conversion: `propose_dossier`, `suggest_conversion`
+- Semantic search passes through to `mempalace.searcher.search_memories()` if MemPalace is installed
 
 ## Tests
 
