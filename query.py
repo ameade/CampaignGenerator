@@ -24,7 +24,7 @@ import argparse
 import sys
 from pathlib import Path
 
-from campaignlib import chunk_text, make_client, stream_api
+from campaignlib import chunk_text, make_client, stream_api, DEFAULT_MODEL
 
 FILTER_SYSTEM = """\
 You are searching D&D session notes for information relevant to a specific query.
@@ -113,7 +113,7 @@ def main() -> None:
                         help="Characters per chunk (default: 40000 — smaller = more precise hits)")
     parser.add_argument("--verbose", "-v", action="store_true",
                         help="Show per-chunk progress")
-    parser.add_argument("--model", default="claude-sonnet-4-20250514",
+    parser.add_argument("--model", default=DEFAULT_MODEL,
                         help="Claude model to use")
     args = parser.parse_args()
 

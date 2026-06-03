@@ -6,11 +6,14 @@ from pathlib import Path
 MODELS = [
     "claude-sonnet-4-6",
     "claude-sonnet-4-20250514",
+    "claude-opus-4-8",
     "claude-opus-4-6",
     "claude-haiku-4-5-20251001",
 ]
 
-DEFAULT_MODEL = "claude-sonnet-4-6"
+# Mirror campaignlib's CAMPAIGN_MODEL override so the UI's default model
+# matches whatever the CLI scripts default to.
+DEFAULT_MODEL = os.environ.get("CAMPAIGN_MODEL") or "claude-sonnet-4-6"
 
 # Session directory derived sub-paths
 DERIVED_SUBDIRS = {

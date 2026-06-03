@@ -13,6 +13,7 @@ never shadow an in-code default again.
 
 from __future__ import annotations
 
+import os
 from typing import Annotated, Any, Literal
 
 from pydantic import BaseModel, BeforeValidator, ConfigDict, Field
@@ -161,7 +162,9 @@ class RuntimeSection(BaseModel):
 
     model_config = ConfigDict(extra="allow")
 
-    default_model: str = "claude-sonnet-4-6"
+    default_model: str = Field(
+        default_factory=lambda: os.environ.get("CAMPAIGN_MODEL") or "claude-sonnet-4-6"
+    )
     session_dir: OptStr = None
 
 

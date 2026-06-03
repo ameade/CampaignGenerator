@@ -35,6 +35,7 @@ from datetime import date
 from pathlib import Path
 
 from campaignlib import (
+    DEFAULT_MODEL,
     build_alias_normalizer,
     format_npc_roster,
     load_alias_map,
@@ -290,7 +291,7 @@ def main() -> None:
                              "'Known NPCs' roster seeds the system prompts.")
     parser.add_argument("--no-log", action="store_true",
                         help="Skip saving a log file")
-    parser.add_argument("--model", default="claude-sonnet-4-20250514",
+    parser.add_argument("--model", default=DEFAULT_MODEL,
                         help="Claude model to use")
     args = parser.parse_args()
 

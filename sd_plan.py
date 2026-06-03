@@ -14,7 +14,7 @@ import argparse
 import sys
 from pathlib import Path
 
-from campaignlib import load_agent_prompt, make_client, stream_api
+from campaignlib import load_agent_prompt, make_client, stream_api, DEFAULT_MODEL
 from session_doc.io import load_extractions, load_scene_extractions, parse_plan
 
 
@@ -41,7 +41,7 @@ def main() -> None:
                              '(e.g. "Session 12 — Icespire Hold").')
     parser.add_argument("--out", metavar="FILE", default="plan.md",
                         help="Where to write plan.md (default: plan.md in cwd).")
-    parser.add_argument("--model", default="claude-sonnet-4-6")
+    parser.add_argument("--model", default=DEFAULT_MODEL)
     parser.add_argument("--fast", action="store_true",
                         help="Use Haiku (~4x cheaper, faster).")
     parser.add_argument("--verbose", action="store_true")

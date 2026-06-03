@@ -12,7 +12,7 @@ import argparse
 import sys
 from pathlib import Path
 
-from campaignlib import make_client, stream_api
+from campaignlib import make_client, stream_api, DEFAULT_MODEL
 
 
 OUTLINE_SYSTEM = """\
@@ -72,8 +72,8 @@ def main() -> None:
     )
     parser.add_argument(
         "--model",
-        default="claude-sonnet-4-20250514",
-        help="Claude model to use (default: claude-sonnet-4-20250514)",
+        default=DEFAULT_MODEL,
+        help="Claude model to use (default: campaignlib.DEFAULT_MODEL / $CAMPAIGN_MODEL)",
     )
     args = parser.parse_args()
 

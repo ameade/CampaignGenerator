@@ -25,6 +25,7 @@ import sys
 from pathlib import Path
 
 from campaignlib import (
+    DEFAULT_MODEL,
     build_alias_normalizer,
     format_npc_roster,
     load_agent_prompt,
@@ -67,7 +68,7 @@ def main() -> None:
                              "alias in dossier frontmatter is rewritten to its "
                              "canonical name before extract/synth, and a "
                              "'Known NPCs' roster seeds the system prompts.")
-    parser.add_argument("--model", default="claude-sonnet-4-20250514",
+    parser.add_argument("--model", default=DEFAULT_MODEL,
                         help="Claude model to use")
     args = parser.parse_args()
 

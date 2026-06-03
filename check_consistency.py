@@ -15,6 +15,7 @@ import sys
 from pathlib import Path
 
 from campaignlib import (
+    DEFAULT_MODEL,
     assemble_docs,
     find_default_config,
     load_config,
@@ -68,7 +69,7 @@ def main() -> None:
     )
     parser.add_argument(
         "--model",
-        default="claude-sonnet-4-20250514",
+        default=DEFAULT_MODEL,
         help="Claude model to use",
     )
     parser.add_argument(
