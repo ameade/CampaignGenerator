@@ -33,6 +33,7 @@ import sys
 from pathlib import Path
 
 from campaignlib import (
+    DEFAULT_MODEL,
     build_alias_normalizer,
     build_batch_request,
     build_scene_extraction_system_prompt,
@@ -222,7 +223,7 @@ def main() -> None:
                              "(e.g. 'Kostadis'). Rewritten to 'GM:' before "
                              "extraction. Without this flag the GM's lines "
                              "stay under their player name.")
-    parser.add_argument("--model", default="claude-sonnet-4-6")
+    parser.add_argument("--model", default=DEFAULT_MODEL)
     parser.add_argument("--fast", action="store_true",
                         help="Use Haiku instead of Sonnet (~4x cheaper, faster)")
     parser.add_argument("--max-tokens", type=int, default=8192,

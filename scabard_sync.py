@@ -34,7 +34,7 @@ import sys
 import time
 from pathlib import Path
 
-from campaignlib import make_client, stream_api
+from campaignlib import make_client, stream_api, DEFAULT_MODEL
 from scabard_sdk import ScabardAuthError, ScabardClient, ScabardRateLimitError
 
 EXTRACT_SYSTEM = """\
@@ -213,8 +213,8 @@ def main() -> None:
     parser.add_argument("--dry-run", action="store_true",
                         help="Show what would be created/updated without calling the Scabard API")
 
-    parser.add_argument("--model", default="claude-sonnet-4-6",
-                        help="Claude model for extraction (default: claude-sonnet-4-6)")
+    parser.add_argument("--model", default=DEFAULT_MODEL,
+                        help="Claude model for extraction (default: campaignlib.DEFAULT_MODEL / $CAMPAIGN_MODEL)")
 
     args = parser.parse_args()
 

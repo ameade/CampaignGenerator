@@ -21,6 +21,7 @@ from datetime import datetime
 from pathlib import Path
 
 from campaignlib import (
+    DEFAULT_MODEL,
     call_api_with_tools,
     find_default_config,
     load_agent_prompt,
@@ -31,7 +32,6 @@ from campaignlib import (
 from session_doc import extract_character_roster, load_voice_files
 
 
-DEFAULT_MODEL = "claude-sonnet-4-5"
 DEFAULT_MAX_ITERATIONS = 40
 SECTION_SEPARATOR = "\n\n---\n\n"
 

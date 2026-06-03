@@ -57,6 +57,7 @@ from pathlib import Path
 import yaml
 
 from campaignlib import (
+    DEFAULT_MODEL,
     build_alias_normalizer,
     format_npc_roster,
     load_agent_prompt,
@@ -706,7 +707,7 @@ def main() -> None:
                              "extracts with number >= N. Use after a new session "
                              "(e.g. --since 11 when extract_011.md is the new chunk) to skip "
                              "historical chunks already rolled into dossiers.")
-    parser.add_argument("--model", default="claude-sonnet-4-20250514",
+    parser.add_argument("--model", default=DEFAULT_MODEL,
                         help="Claude model to use")
     parser.add_argument("--campaign-dir", default=None,
                         help="Campaign workspace root (default: $CAMPAIGN_DIR "

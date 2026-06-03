@@ -32,7 +32,7 @@ import re
 import sys
 from pathlib import Path
 
-from campaignlib import load_agent_prompt, make_client, save_log, stream_api
+from campaignlib import load_agent_prompt, make_client, save_log, stream_api, DEFAULT_MODEL
 
 
 # ── Pass 1: Planning ───────────────────────────────────────────────────────────
@@ -327,7 +327,7 @@ def main() -> None:
     parser.add_argument("--plan-only", action="store_true",
                         help="Run the planning pass only and print the section outline.")
     parser.add_argument("--no-log", action="store_true")
-    parser.add_argument("--model", default="claude-sonnet-4-6")
+    parser.add_argument("--model", default=DEFAULT_MODEL)
     parser.add_argument("--fast", action="store_true",
                         help="Use Haiku instead of Sonnet (~4x cheaper, faster, slightly lower quality)")
     args = parser.parse_args()

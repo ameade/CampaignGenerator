@@ -17,6 +17,7 @@ import sys
 from pathlib import Path
 
 from campaignlib import (
+    DEFAULT_MODEL,
     assemble_docs,
     copy_to_clipboard,
     find_default_config,
@@ -294,7 +295,7 @@ def main() -> None:
                         help="Copy final output to clipboard")
     parser.add_argument("--config", default=find_default_config(__file__),
                         help="Path to config YAML")
-    parser.add_argument("--model", default="claude-sonnet-4-20250514",
+    parser.add_argument("--model", default=DEFAULT_MODEL,
                         help="Claude model to use")
     parser.add_argument("--output", "-o", metavar="FILE",
                         help="Save final output to file (Voice Keeper responses for pipeline, "

@@ -28,6 +28,7 @@ import sys
 from pathlib import Path
 
 from campaignlib import (
+    DEFAULT_MODEL,
     build_batch_request,
     collect_batch,
     extract_player_character_map,
@@ -248,7 +249,7 @@ def main() -> None:
                         help="Skip the pre-flight check that aborts when --party "
                              "or --gm-player is provided but no VTT lines match "
                              "any of those display names.")
-    parser.add_argument("--model", default="claude-sonnet-4-6")
+    parser.add_argument("--model", default=DEFAULT_MODEL)
     parser.add_argument("--fast", action="store_true",
                         help="Use Haiku instead of Sonnet (~4x cheaper, faster)")
     parser.add_argument("--max-tokens", type=int, default=16384,

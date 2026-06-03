@@ -18,6 +18,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from campaignlib import (
+    DEFAULT_MODEL,
     build_alias_normalizer,
     format_npc_roster,
     load_alias_map,
@@ -124,7 +125,7 @@ def main() -> None:
     parser.add_argument("--dry-run", action="store_true",
                         help="Build prompts but skip the API call.")
     parser.add_argument("--verbose", action="store_true")
-    parser.add_argument("--model", default="claude-sonnet-4-6")
+    parser.add_argument("--model", default=DEFAULT_MODEL)
     parser.add_argument("--fast", action="store_true",
                         help="Use Haiku (~4x cheaper, faster).")
     parser.add_argument("--dgx-endpoint", default=None, metavar="URL",

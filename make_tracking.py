@@ -20,7 +20,7 @@ import argparse
 import sys
 from pathlib import Path
 
-from campaignlib import make_client, stream_api
+from campaignlib import make_client, stream_api, DEFAULT_MODEL
 
 SYSTEM_PROMPT = """\
 You are reading a D&D adventure module or campaign document and extracting a tracking list.
@@ -65,7 +65,7 @@ def main() -> None:
                         help="Adventure module or campaign markdown file")
     parser.add_argument("--output", "-o", required=True, metavar="FILE",
                         help="Where to save the tracking list (e.g. tracking.txt)")
-    parser.add_argument("--model", default="claude-sonnet-4-20250514",
+    parser.add_argument("--model", default=DEFAULT_MODEL,
                         help="Claude model to use")
     args = parser.parse_args()
 

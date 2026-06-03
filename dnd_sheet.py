@@ -15,7 +15,7 @@ import base64
 import sys
 from pathlib import Path
 
-from campaignlib import make_client, call_api
+from campaignlib import make_client, call_api, DEFAULT_MODEL
 
 SYSTEM_PROMPT = """\
 You are converting a D&D Beyond character sheet PDF into a clean markdown document \
@@ -123,7 +123,7 @@ def main() -> None:
                         help="Output file (single PDF only)")
     parser.add_argument("--output-dir", metavar="DIR",
                         help="Output directory for multiple PDFs (uses <name>.md as filename)")
-    parser.add_argument("--model", default="claude-sonnet-4-20250514",
+    parser.add_argument("--model", default=DEFAULT_MODEL,
                         help="Claude model to use")
     args = parser.parse_args()
 

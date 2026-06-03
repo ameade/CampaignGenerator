@@ -12,7 +12,7 @@ import argparse
 import sys
 from pathlib import Path
 
-from campaignlib import load_agent_prompt, make_client, stream_api
+from campaignlib import load_agent_prompt, make_client, stream_api, DEFAULT_MODEL
 
 
 def main() -> None:
@@ -30,7 +30,7 @@ def main() -> None:
     parser.add_argument("--out", metavar="FILE", default="consistency_report.md",
                         help="Where to write the report (default: consistency_report.md "
                              "in the current directory).")
-    parser.add_argument("--model", default="claude-sonnet-4-6")
+    parser.add_argument("--model", default=DEFAULT_MODEL)
     parser.add_argument("--fast", action="store_true",
                         help="Use Haiku (~4x cheaper, faster).")
     parser.add_argument("--verbose", action="store_true")
