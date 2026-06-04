@@ -18,7 +18,7 @@ const props = defineProps<{
   context: string
   // ── Stage knobs ───────────────────────────────────────────
   useBatch: boolean
-  backend: 'anthropic' | 'dgx'
+  backend: 'anthropic' | 'dgx' | 'claude-code'
   narrateTokens: number
   proseMode: boolean
   reflections: boolean
@@ -38,7 +38,7 @@ const emit = defineEmits<{
   'update:characters': [value: string]
   'update:context': [value: string]
   'update:useBatch': [value: boolean]
-  'update:backend': [value: 'anthropic' | 'dgx']
+  'update:backend': [value: 'anthropic' | 'dgx' | 'claude-code']
   'update:narrateTokens': [value: number]
   'update:proseMode': [value: boolean]
   'update:reflections': [value: boolean]
@@ -150,6 +150,12 @@ const ready = computed(() => !!(props.session?.trim() && props.sceneExtractionsD
               :class="{ active: backend === 'anthropic' }"
               @click="emit('update:backend', 'anthropic')"
             >Anthropic</button>
+            <button
+              class="seg-btn"
+              :class="{ active: backend === 'claude-code' }"
+              @click="emit('update:backend', 'claude-code')"
+              title="Route generation through the Claude Code CLI — bills your Pro/Max subscription, not the metered API"
+            >Subscription</button>
             <button
               class="seg-btn"
               :class="{ active: backend === 'dgx' }"

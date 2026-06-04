@@ -615,7 +615,13 @@ def _llm_env() -> dict[str, str]:
     Stage 1/2/Plan routes pass nothing because their LLM paths use tool-use
     and the OpenAI-compat adapter does not support tools.
     """
-    if CONFIG.get("backend") != "dgx":
+    backend = CONFIG.get("backend")
+    if backend == "claude-code":
+        # Route through the `claude` CLI (Pro/Max subscription billing). The
+        # global model picker holds a native claude-* name, which this backend
+        # honors as-is — so, unlike DGX, no model override is injected here.
+        return {"CG_BACKEND": "claude-code"}
+    if backend != "dgx":
         return {}
     return {
         "DGX_ENDPOINT": CONFIG.get("dgx_endpoint") or "http://localhost:8000",

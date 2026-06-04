@@ -1,10 +1,26 @@
 <script setup lang="ts">
+import { computed } from 'vue'
 import { useConfigStore } from '../../stores/config'
 import { useRouter, useRoute } from 'vue-router'
 
 const config = useConfigStore()
 const router = useRouter()
 const route = useRoute()
+
+// LLM backend selector (global). Persisted to ui.session_doc.backend — the same
+// field _llm_env() reads server-side — so the Session Doc Editor's own toggle
+// stays in sync. 'claude-code' routes generation through the Claude Code CLI,
+// billing the Pro/Max subscription instead of the metered Anthropic API.
+type Backend = 'anthropic' | 'dgx' | 'claude-code'
+const currentBackend = computed<Backend>(() => {
+  const b = config.values.sd_backend
+  return b === 'dgx' || b === 'claude-code' ? b : 'anthropic'
+})
+async function setBackend(b: Backend) {
+  if (currentBackend.value === b) return
+  config.values.sd_backend = b
+  await config.updateSection('session_doc', { backend: b })
+}
 
 interface NavItem {
   label: string
@@ -106,13 +122,36 @@ function navigate(path: string) {
     </nav>
 
     <div class="sidebar-footer">
+      <div class="backend-selector">
+        <label class="model-label">BACKEND</label>
+        <div class="backend-toggle">
+          <button
+            class="backend-btn"
+            :class="{ active: currentBackend === 'anthropic' }"
+            title="Anthropic API — metered, billed to ANTHROPIC_API_KEY"
+            @click="setBackend('anthropic')"
+          >API</button>
+          <button
+            class="backend-btn"
+            :class="{ active: currentBackend === 'claude-code' }"
+            title="Claude Code CLI — bills your Pro/Max subscription, no per-token API charge"
+            @click="setBackend('claude-code')"
+          >Sub</button>
+          <button
+            class="backend-btn"
+            :class="{ active: currentBackend === 'dgx' }"
+            title="Local DGX / vLLM endpoint"
+            @click="setBackend('dgx')"
+          >DGX</button>
+        </div>
+      </div>
       <div class="model-selector">
         <label class="model-label">MODEL</label>
         <select v-model="config.model" class="model-select" @change="config.updateRuntime({ default_model: config.model })">
           <option v-for="m in config.models" :key="m" :value="m">{{ m }}</option>
         </select>
       </div>
-      <div v-if="!config.apiKeyPresent" class="api-warning">
+      <div v-if="!config.apiKeyPresent && currentBackend !== 'claude-code'" class="api-warning">
         ANTHROPIC_API_KEY not set
       </div>
     </div>
@@ -185,6 +224,41 @@ function navigate(path: string) {
   color: var(--text-muted);
   display: block;
   margin-bottom: 4px;
+}
+
+.backend-selector {
+  margin-bottom: 10px;
+}
+
+.backend-toggle {
+  display: flex;
+  gap: 2px;
+  background: var(--bg-surface0);
+  border: 1px solid var(--bg-surface1);
+  border-radius: 4px;
+  padding: 2px;
+}
+
+.backend-btn {
+  flex: 1;
+  font-size: 10px;
+  font-family: var(--mono);
+  padding: 3px 0;
+  border: none;
+  border-radius: 3px;
+  background: transparent;
+  color: var(--text-muted);
+  cursor: pointer;
+}
+
+.backend-btn:hover {
+  color: var(--text);
+}
+
+.backend-btn.active {
+  background: var(--bg-surface1);
+  color: var(--text);
+  font-weight: 600;
 }
 
 .model-select {
