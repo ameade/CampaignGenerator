@@ -47,7 +47,7 @@ from campaignlib import (
     make_client,
     stream_api,
 )
-from ensemble_extract import _norm_subject
+from ensemble_merge import _norm_subject
 from synthesise_world_state import (
     expand_globs,
     load_aliases,
