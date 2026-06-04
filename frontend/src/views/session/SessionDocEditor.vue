@@ -31,7 +31,7 @@ const proseMode = ref(false)
 const reflections = ref(false)
 const narrationGenre = ref('')
 const useBatch = ref(false)
-const backend = ref<'anthropic' | 'dgx'>('anthropic')
+const backend = ref<'anthropic' | 'dgx' | 'claude-code'>('anthropic')
 
 // Drawer open/closed — persisted in localStorage so it survives reloads.
 const DRAWER_KEY = 'session-doc-editor.knob-drawer.open'
@@ -58,7 +58,9 @@ function loadConfigFields() {
   reflections.value = v.sd_reflections || false
   narrationGenre.value = v.sd_narration_genre || ''
   useBatch.value = v.sd_batch === true
-  backend.value = v.sd_backend === 'dgx' ? 'dgx' : 'anthropic'
+  backend.value = v.sd_backend === 'dgx' ? 'dgx'
+    : v.sd_backend === 'claude-code' ? 'claude-code'
+    : 'anthropic'
 }
 
 // ── Auto-apply: debounce-PUT changes to /api/editor/config ───────
@@ -195,7 +197,7 @@ interface ProfileEntry {
     prose_mode?: boolean
     reflections?: boolean
     narration_genre?: string
-    backend?: 'anthropic' | 'dgx'
+    backend?: 'anthropic' | 'dgx' | 'claude-code'
   }
 }
 const profiles = ref<ProfileEntry[]>([])
@@ -254,7 +256,7 @@ function applyProfileKnobs(p: ProfileEntry) {
   if (typeof k.prose_mode === 'boolean') proseMode.value = k.prose_mode
   if (typeof k.reflections === 'boolean') reflections.value = k.reflections
   if (typeof k.narration_genre === 'string') narrationGenre.value = k.narration_genre
-  if (k.backend === 'anthropic' || k.backend === 'dgx') backend.value = k.backend
+  if (k.backend === 'anthropic' || k.backend === 'dgx' || k.backend === 'claude-code') backend.value = k.backend
 }
 
 async function selectProfile(name: string) {

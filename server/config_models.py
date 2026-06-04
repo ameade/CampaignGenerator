@@ -77,7 +77,7 @@ class SessionDocSection(BaseModel):
     # LLM backend selector + DGX overrides. Endpoint/model defaults are
     # applied at the route boundary in `scene_editor._llm_env()` so a null
     # value here means "use the runtime default", not "unset".
-    backend: Literal["anthropic", "dgx"] = "anthropic"
+    backend: Literal["anthropic", "dgx", "claude-code"] = "anthropic"
     dgx_endpoint: OptStr = None
     dgx_model: OptStr = None
     scrub_enabled: OptBool = False

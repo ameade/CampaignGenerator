@@ -26,7 +26,7 @@ interface Knobs {
   prose_mode?: boolean
   reflections?: boolean
   narration_genre?: string | null
-  backend?: 'anthropic' | 'dgx'
+  backend?: 'anthropic' | 'dgx' | 'claude-code'
 }
 
 interface RosterRow {
