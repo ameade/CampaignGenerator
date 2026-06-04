@@ -1,8 +1,12 @@
 #!/usr/bin/env python3
-"""Five-pass ensemble fact extractor.
+"""Five-pass ensemble fact extractor (generation half of the pipeline).
 
-Runs ``extract_facts.py`` five times against the same input, each with a
-different lens, then merges the results deterministically.
+Runs ``extract_facts.py`` once per lens, fanned across endpoints with
+caching/speculation/timeouts, and writes each pass's facts plus a
+``manifest.json``. Merging is a SEPARATE step — see ``ensemble_merge.py``,
+which consumes the manifest — so a generation can be re-merged (subject merge,
+nomic-embedding merge, different thresholds) without re-extracting. The
+``ensemble.py`` driver runs both halves.
 
 Passes:
 
@@ -28,29 +32,22 @@ Passes:
                      armor", "Grygum recalled the Giants").
 
 Each pass writes its own ``facts_NNN.json`` cache under
-``<workdir>/cache/<pass_name>/``. Re-runs reuse cached chunks, so iterating
-on the merge step (or fixing one bad chunk) is cheap.
+``<workdir>/cache/<pass_name>/`` and a per-pass ``<name>.json`` of facts.
+Re-runs reuse cached chunks, so resuming (or fixing one bad chunk) is cheap.
+``manifest.json`` maps each pass to its output file + source document, and is
+the handoff to ``ensemble_merge.py``.
 
-Merge is deterministic:
-
-- Group facts by (type, normalized subject). Normalization is lowercase
-  alphanumerics only, so "Bupido" and "Buppido" cluster together, as do
-  "Ilvara's quarters" and "Ilvara’s quarters".
-- Within each group, near-duplicate ``fact`` strings (SequenceMatcher
-  ratio ≥ threshold) collapse into one entry; we keep the longest
-  ``fact`` and the longest ``source_quote``.
-- Each merged entry carries a ``passes`` list naming which input passes
-  produced it. Facts present in all three passes are higher-confidence;
-  facts unique to one pass are the recall-bonus from that lens.
-
-This does NOT do cross-subject normalization (Velkenyvelve ↔
-Velkynvelve, Sloopdopblop ↔ Sloobludop). Those phonetic-drift
-clusters need a campaign-level name glossary, which is a deliberately
-separate step.
+Run plans (``--plan``): instead of the built-in 5-lens plan against a single
+input, an extract-plan YAML can declare arbitrary passes, each reading its own
+``document`` — e.g. the 5 lenses against ``session-summary.md`` plus an extra
+``interiority`` pass against ``gm-assist-doc.md`` (6 passes total). The plan
+holds passes + documents only; merge settings live in a separate merge-config
+YAML consumed by ``ensemble_merge.py``. See ``--plan`` in ``--help``.
 
 Usage:
 
     python ensemble_extract.py session.md --workdir runs/session_001/
+    python ensemble_merge.py --workdir runs/session_001/ --config merge.yaml
 
 Re-run safely — caches make it cheap.
 """
@@ -59,12 +56,10 @@ import argparse
 import json
 import os
 import queue
-import re
 import subprocess
 import sys
 import threading
 import time
-from difflib import SequenceMatcher
 from pathlib import Path
 
 EXTRACT_SCRIPT = Path(__file__).resolve().parent / "extract_facts.py"
@@ -76,174 +71,6 @@ PASSES = [
     {"name": "temporal",    "chunk_size": 15000, "agent": "extract_facts_temporal"},
     {"name": "interiority", "chunk_size": 15000, "agent": "extract_facts_interiority"},
 ]
-
-
-def _norm_subject(s: str) -> str:
-    return re.sub(r"[^a-z0-9]+", "", s.lower())
-
-
-def _fact_key(fact: dict) -> tuple[str, str]:
-    return (fact.get("type", ""), _norm_subject(fact.get("subject", "")))
-
-
-def _facts_similar(a: str, b: str, threshold: float) -> bool:
-    if a == b:
-        return True
-    return SequenceMatcher(None, a.lower(), b.lower()).ratio() >= threshold
-
-
-def merge_facts(
-    pass_outputs: dict[str, list[dict]], similarity: float
-) -> list[dict]:
-    """Union facts across passes, group by (type, normalized subject), dedup."""
-    groups: dict[tuple[str, str], list[tuple[dict, str]]] = {}
-    for pass_name, facts in pass_outputs.items():
-        for f in facts:
-            groups.setdefault(_fact_key(f), []).append((f, pass_name))
-
-    merged: list[dict] = []
-    for items in groups.values():
-        kept: list[dict] = []
-        for fact, pass_name in items:
-            text = fact.get("fact", "")
-            quote = fact.get("source_quote", "")
-            matched: dict | None = None
-            for existing in kept:
-                if _facts_similar(existing["fact"], text, similarity):
-                    matched = existing
-                    break
-            if matched is not None:
-                if len(text) > len(matched["fact"]):
-                    matched["fact"] = text
-                if len(quote) > len(matched.get("source_quote", "")):
-                    matched["source_quote"] = quote
-                if pass_name not in matched["passes"]:
-                    matched["passes"].append(pass_name)
-            else:
-                kept.append(
-                    {
-                        "type": fact.get("type", ""),
-                        "subject": fact.get("subject", ""),
-                        "fact": text,
-                        "source_quote": quote,
-                        "passes": [pass_name],
-                    }
-                )
-        merged.extend(kept)
-
-    # Stable sort for diffability across runs.
-    merged.sort(key=lambda f: (f["type"], _norm_subject(f["subject"]), f["fact"]))
-    return merged
-
-
-DEFAULT_EMBED_MODEL = "nomic-ai/nomic-embed-text-v1.5"
-
-
-def embed_texts(texts: list[str], endpoint: str, model: str, batch: int = 256):
-    """Return an L2-normalised numpy array of embeddings, one row per text.
-
-    Calls an OpenAI-compatible /v1/embeddings server (e.g. vllm-embed on the
-    DGX). Normalising up front makes cosine similarity a plain dot product.
-    """
-    import numpy as np
-    from openai import OpenAI
-
-    base = endpoint.rstrip("/")
-    if not base.endswith("/v1"):
-        base += "/v1"
-    client = OpenAI(base_url=base, api_key="not-needed")
-    vectors: list[list[float]] = []
-    for i in range(0, len(texts), batch):
-        resp = client.embeddings.create(model=model, input=texts[i:i + batch])
-        vectors.extend(d.embedding for d in resp.data)
-    arr = np.asarray(vectors, dtype="float32")
-    norms = np.linalg.norm(arr, axis=1, keepdims=True)
-    norms[norms == 0] = 1.0
-    return arr / norms
-
-
-def merge_facts_embed(
-    pass_outputs: dict[str, list[dict]], endpoint: str, model: str,
-    threshold: float = 0.93,
-) -> list[dict]:
-    """Like merge_facts, but cluster on embedding cosine of the FACT TEXT,
-    partitioned only by `type` — the subject string is NOT part of the key.
-
-    This catches cross-subject duplicates the SequenceMatcher merge cannot:
-    two samples describe the same event under different synthetic subject
-    labels ("flee to Darklake tunnel" vs "flee toward Darklake"), or the same
-    entity under a phonetic-variant spelling (Velkynvelve / Velkenyvelve).
-    Their subject strings differ, so the subject-keyed merge never compares
-    their near-identical fact text; cosine similarity does.
-
-    Greedy clustering against each cluster's fixed anchor (the longest fact,
-    since we process longest-first). The default 0.93 threshold sits in the
-    empirically-measured empty gap between true duplicates (~0.97-0.98) and
-    distinct-but-related facts (~0.75-0.78), so distinct facts are NOT merged.
-
-    Every collapsed variant is preserved on the survivor for human audit:
-    `variants` lists the distinct fact strings merged in, `subjects` the
-    distinct subject labels. Merging is a scope decision feeding the human
-    review step, so nothing is silently discarded — the human can see exactly
-    what was collapsed and split it back if a merge was wrong.
-    """
-    import numpy as np
-
-    # Flatten to (fact_dict, run_key), longest fact first so cluster anchors are
-    # the most complete phrasing.
-    flat: list[tuple[dict, str]] = []
-    for run_key, facts in pass_outputs.items():
-        for f in facts:
-            flat.append((f, run_key))
-    flat.sort(key=lambda fk: -len(fk[0].get("fact", "")))
-
-    by_type: dict[str, list[tuple[dict, str]]] = {}
-    for f, run_key in flat:
-        by_type.setdefault(f.get("type", ""), []).append((f, run_key))
-
-    merged: list[dict] = []
-    for ftype, items in by_type.items():
-        texts = [f.get("fact", "") for f, _ in items]
-        vecs = embed_texts(texts, endpoint, model) if texts else None
-        anchors: list[int] = []          # indices into `items` that seed clusters
-        clusters: list[dict] = []        # survivor dicts, parallel to `anchors`
-        anchor_vecs = None               # np matrix of anchor embeddings
-        for idx, (fact, run_key) in enumerate(items):
-            text = fact.get("fact", "")
-            quote = fact.get("source_quote", "")
-            subj = fact.get("subject", "")
-            matched = None
-            if anchors:
-                sims = anchor_vecs @ vecs[idx]
-                best = int(np.argmax(sims))
-                if sims[best] >= threshold:
-                    matched = clusters[best]
-            if matched is not None:
-                if run_key not in matched["passes"]:
-                    matched["passes"].append(run_key)
-                if text and text not in matched["variants"]:
-                    matched["variants"].append(text)
-                if subj and subj not in matched["subjects"]:
-                    matched["subjects"].append(subj)
-                if len(quote) > len(matched.get("source_quote", "")):
-                    matched["source_quote"] = quote
-            else:
-                clusters.append({
-                    "type": ftype,
-                    "subject": subj,
-                    "fact": text,            # anchor = longest, processed first
-                    "source_quote": quote,
-                    "passes": [run_key],
-                    "variants": [text] if text else [],
-                    "subjects": [subj] if subj else [],
-                })
-                anchors.append(idx)
-                row = vecs[idx:idx + 1]
-                anchor_vecs = row if anchor_vecs is None else np.vstack([anchor_vecs, row])
-        merged.extend(clusters)
-
-    merged.sort(key=lambda f: (f["type"], _norm_subject(f["subject"]), f["fact"]))
-    return merged
 
 
 def run_unit(
@@ -366,34 +193,45 @@ def pick_straggler(inflight: dict, settled: set, now: float,
 def main() -> None:
     parser = argparse.ArgumentParser(
         description=(
-            "Run the 5-lens ensemble extraction plan "
-            "(small/large/sweep/temporal/interiority), optionally with "
-            "self-consistency samples and fanned across multiple endpoints "
-            "concurrently, then deterministically merge with subject "
-            "clustering and near-duplicate fact dedup."
+            "Run the ensemble extraction plan (GENERATION only): the built-in "
+            "5 lenses (small/large/sweep/temporal/interiority) or a --plan, "
+            "optionally with self-consistency samples, fanned across multiple "
+            "endpoints concurrently. Writes per-pass facts + manifest.json; "
+            "merge the result separately with ensemble_merge.py."
         )
     )
-    parser.add_argument("input",
-                        help="Input text file (session summary, chapter, ...)")
+    parser.add_argument("input", nargs="?",
+                        help="Default input text file (session summary, chapter, "
+                             "...). Optional when --plan gives every pass its own "
+                             "'document'; otherwise required.")
     parser.add_argument("--workdir", "-w", required=True, metavar="DIR",
                         help="Working directory for per-pass outputs and caches.")
-    parser.add_argument("--similarity", type=float, default=0.85, metavar="RATIO",
-                        help="Fact-text similarity threshold for within-group "
-                             "dedup (0..1, default 0.85). Higher = stricter, "
-                             "more duplicates retained; lower = looser, more "
-                             "collapsed.")
+    parser.add_argument("--plan", metavar="YAML",
+                        help="Extract-plan YAML that overrides the built-in "
+                             "5-lens plan. Shape: a 'passes' list where each pass "
+                             "has name/agent/chunk_size and may name its own "
+                             "'document' (so e.g. 5 lenses on the summary + an "
+                             "interiority pass on the gm-assist doc); an optional "
+                             "top-level 'document' is the default for passes that "
+                             "omit one. Merge settings are NOT here — they live "
+                             "in a separate merge-config YAML for ensemble_merge.py. "
+                             "Relative document paths resolve against the plan "
+                             "file's directory.")
+    parser.add_argument("--dry-run", action="store_true",
+                        help="Resolve and print the plan (passes, per-pass "
+                             "documents) without extracting.")
     parser.add_argument("--skip", action="append", default=[], metavar="NAME",
-                        choices=[p["name"] for p in PASSES],
                         help="Skip a named pass (can repeat). Useful when "
-                             "iterating on prompt fixes for one lens.")
+                             "iterating on prompt fixes for one lens. Applies to "
+                             "built-in and --plan pass names alike.")
     parser.add_argument("--samples", type=int, default=1, metavar="N",
                         help="Self-consistency: run each pass N times and union "
                              "the results (default 1). Extraction is "
                              "nondeterministic (no fixed temperature/seed), so "
-                             "re-sampling recovers facts a single run misses. "
-                             "Each merged fact gains 'n_samples' = how many "
-                             "sample-runs produced it — a confidence signal for "
-                             "the human review step; nothing is auto-filtered.")
+                             "re-sampling recovers facts a single run misses. The "
+                             "merge step records 'n_samples' per fact — a "
+                             "confidence signal for human review; nothing is "
+                             "auto-filtered.")
     parser.add_argument("--endpoints", nargs="+", metavar="URL",
                         help="One or more OpenAI-compatible endpoints to fan the "
                              "work across CONCURRENTLY (one in-flight unit per "
@@ -436,44 +274,95 @@ def main() -> None:
     parser.add_argument("--unit-retries", type=int, default=3, metavar="N",
                         help="Max times a single unit may time out and be re-queued "
                              "before it fails the run (default 3).")
-    parser.add_argument("--embed-endpoint", default=os.environ.get("EMBED_ENDPOINT"),
-                        metavar="URL",
-                        help="OpenAI-compatible /v1/embeddings endpoint (e.g. "
-                             "vllm-embed at http://192.168.1.147:8000). When set, "
-                             "facts are merged by embedding cosine of the fact TEXT "
-                             "(partitioned by type only), catching cross-subject "
-                             "duplicates the default subject-keyed merge misses "
-                             "(same event under different labels; phonetic-variant "
-                             "spellings). Default ($EMBED_ENDPOINT, else unset): use "
-                             "the subject-keyed SequenceMatcher merge — no embed "
-                             "server needed.")
-    parser.add_argument("--embed-model", default=os.environ.get("EMBED_MODEL", DEFAULT_EMBED_MODEL),
-                        metavar="ID", help=f"Embedding model id (default: "
-                             f"$EMBED_MODEL or {DEFAULT_EMBED_MODEL}).")
-    parser.add_argument("--embed-threshold", type=float, default=0.93, metavar="COS",
-                        help="Cosine threshold for the embedding merge (default "
-                             "0.93). Measured separation: true duplicates ~0.97-0.98, "
-                             "distinct-but-related facts ~0.75-0.78 — 0.93 sits in "
-                             "the empty gap. Lower = more aggressive collapsing "
-                             "(risk of merging distinct facts); higher = stricter.")
     args = parser.parse_args()
-
-    input_path = Path(args.input).expanduser().resolve()
-    if not input_path.exists():
-        print(f"Error: input not found: {input_path}", file=sys.stderr)
-        sys.exit(1)
 
     workdir = Path(args.workdir).expanduser().resolve()
     workdir.mkdir(parents=True, exist_ok=True)
 
-    active_passes = [p for p in PASSES if p["name"] not in args.skip]
+    # The positional input is the DEFAULT document; each pass may override it.
+    default_input = Path(args.input).expanduser().resolve() if args.input else None
+
+    # ── Resolve the pass list ────────────────────────────────────────────────
+    # No --plan  → the built-in 5-lens PASSES, all reading `default_input`.
+    # With --plan → passes come from YAML, each optionally naming its own
+    # `document` (e.g. 5 lenses on the summary + interiority on the gm-assist
+    # doc). A top-level plan `document:` is the default for passes without one;
+    # relative document paths resolve against the plan file's directory.
+    if args.plan:
+        import yaml
+        plan_path = Path(args.plan).expanduser().resolve()
+        plan = yaml.safe_load(plan_path.read_text(encoding="utf-8")) or {}
+        plan_dir = plan_path.parent
+        plan_default_doc = plan.get("document")
+
+        def _resolve_doc(doc: str) -> Path:
+            p = Path(doc).expanduser()
+            return (p if p.is_absolute() else plan_dir / p).resolve()
+
+        raw_passes = plan.get("passes") or []
+        if not raw_passes:
+            print(f"Error: plan {plan_path} defines no 'passes'.", file=sys.stderr)
+            sys.exit(1)
+        active_passes = []
+        for i, p in enumerate(raw_passes):
+            name = p.get("name")
+            if not name:
+                print(f"Error: plan pass #{i + 1} has no 'name'.", file=sys.stderr)
+                sys.exit(1)
+            doc = p.get("document", plan_default_doc)
+            if doc is not None:
+                ip = _resolve_doc(doc)
+            elif default_input is not None:
+                ip = default_input
+            else:
+                print(f"Error: plan pass {name!r} sets no 'document' and no "
+                      f"positional input was given to fall back on.",
+                      file=sys.stderr)
+                sys.exit(1)
+            active_passes.append({
+                "name": name,
+                "agent": p.get("agent", "extract_facts"),
+                "chunk_size": int(p.get("chunk_size", 15000)),
+                "input_path": ip,
+            })
+    else:
+        if default_input is None:
+            print("Error: an input file is required (positional) unless --plan "
+                  "supplies per-pass documents.", file=sys.stderr)
+            sys.exit(1)
+        active_passes = [{**p, "input_path": default_input} for p in PASSES]
+
+    # --skip applies by name to built-in and plan passes alike.
+    active_passes = [p for p in active_passes if p["name"] not in args.skip]
     if not active_passes:
         print("Error: no passes selected (all skipped).", file=sys.stderr)
         sys.exit(1)
 
-    print(f"Input:    {input_path}")
+    # Pass names key the per-pass output files / cache dirs — must be unique.
+    names = [p["name"] for p in active_passes]
+    dupes = sorted({n for n in names if names.count(n) > 1})
+    if dupes:
+        print(f"Error: duplicate pass name(s): {', '.join(dupes)}. Names must be "
+              f"unique (they key the output files).", file=sys.stderr)
+        sys.exit(1)
+
+    # Every pass's document must exist.
+    for p in active_passes:
+        if not p["input_path"].exists():
+            print(f"Error: input not found for pass {p['name']!r}: "
+                  f"{p['input_path']}", file=sys.stderr)
+            sys.exit(1)
+
+    # ── Header ───────────────────────────────────────────────────────────────
     print(f"Workdir:  {workdir}")
-    print(f"Passes:   {', '.join(p['name'] for p in active_passes)}")
+    docs = {p["input_path"] for p in active_passes}
+    if len(docs) == 1:
+        print(f"Input:    {next(iter(docs))}")
+        print(f"Passes:   {', '.join(p['name'] for p in active_passes)}")
+    else:
+        print("Passes (per-document):")
+        for p in active_passes:
+            print(f"  {p['name']:24s} <- {p['input_path']}")
     if args.skip:
         print(f"Skipped:  {', '.join(args.skip)}")
     if args.samples > 1:
@@ -492,6 +381,9 @@ def main() -> None:
     print(f"Units:    {len(units)} ({len(active_passes)} passes x {args.samples} "
           f"sample(s)) across {len(endpoints)} endpoint(s)")
     print("=" * 70)
+    if args.dry_run:
+        print("[dry-run] plan resolved; no extraction performed.")
+        return
 
     MAX_COPIES = 2          # original + at most one speculative duplicate
     POLL = 2.0              # seconds a free worker waits before re-checking
@@ -584,7 +476,7 @@ def main() -> None:
 
             try:
                 _, facts, err, timed_out = run_unit(
-                    input_path, pass_spec, k, args.samples, workdir, endpoint, model,
+                    pass_spec["input_path"], pass_spec, k, args.samples, workdir, endpoint, model,
                     register_proc=register, is_cancelled=lambda _key=key: _key in cancelled,
                     timeout=unit_timeout)
             except Exception as e:  # a worker must never die silently
@@ -643,54 +535,45 @@ def main() -> None:
             print(f"  ERROR: {e}", file=sys.stderr)
         sys.exit(1)
 
-    pass_outputs = results
     print(f"\nExtraction wall-clock: {elapsed:.0f}s across {len(endpoints)} endpoint(s)")
 
-    print("\n" + "=" * 70)
-    if args.embed_endpoint:
-        print(f"Merging (embedding cosine, threshold {args.embed_threshold}, "
-              f"{args.embed_endpoint})...")
-        merged = merge_facts_embed(pass_outputs, args.embed_endpoint,
-                                   args.embed_model, args.embed_threshold)
-    else:
-        print("Merging (subject-keyed SequenceMatcher)...")
-        merged = merge_facts(pass_outputs, args.similarity)
-
-    # merge_facts tracks provenance per sample-run key ("sweep#1", "sweep#3").
-    # Collapse those back to clean lens names and record how many independent
-    # sample-runs produced each fact. n_samples is a confidence signal for the
-    # human review step — we deliberately do NOT drop low-agreement facts, since
-    # deciding what is in scope is a precision decision the human makes.
-    for f in merged:
-        runs = f["passes"]
-        f["n_samples"] = len(runs)
-        f["passes"] = sorted({p.split("#")[0] for p in runs})
-
-    merged_path = workdir / "merged.json"
-    merged_path.write_text(json.dumps(merged, indent=2) + "\n", encoding="utf-8")
+    # Write the handoff manifest the merge step (ensemble_merge.py) consumes.
+    # Per-pass *.json already exist on disk (run_unit -> extract_facts --output);
+    # we record the mapping (provenance key, file, document) only. File naming
+    # mirrors run_unit: single sample -> {name}.json, multi -> {name}.s{k}.json.
+    single = args.samples == 1
+    manifest = {
+        "version": 1,
+        "samples": args.samples,
+        "default_input": str(default_input) if default_input else None,
+        "passes": [],
+    }
+    for p in active_passes:
+        outs = []
+        for k in range(1, args.samples + 1):
+            key = f"{p['name']}#{k}"
+            fname = f"{p['name']}.json" if single else f"{p['name']}.s{k}.json"
+            outs.append({"key": key, "file": fname,
+                         "n_facts": len(results.get(key, []))})
+        manifest["passes"].append({
+            "name": p["name"], "agent": p["agent"],
+            "chunk_size": p["chunk_size"], "document": str(p["input_path"]),
+            "outputs": outs,
+        })
+    manifest_path = workdir / "manifest.json"
+    manifest_path.write_text(json.dumps(manifest, indent=2) + "\n", encoding="utf-8")
 
     counts_by_lens: dict[str, int] = {}
-    for key, facts in pass_outputs.items():
+    for key, facts in results.items():
         lens = key.split("#")[0]
         counts_by_lens[lens] = counts_by_lens.get(lens, 0) + len(facts)
-    counts_by_type: dict[str, int] = {}
-    pass_combo_counts: dict[str, int] = {}
-    agree_hist: dict[int, int] = {}
-    for f in merged:
-        counts_by_type[f["type"]] = counts_by_type.get(f["type"], 0) + 1
-        combo = "+".join(f["passes"])
-        pass_combo_counts[combo] = pass_combo_counts.get(combo, 0) + 1
-        agree_hist[f["n_samples"]] = agree_hist.get(f["n_samples"], 0) + 1
 
-    print(f"\nPer-lens facts (raw, summed over samples): {counts_by_lens}")
-    print(f"Total merged (unique): {len(merged)}")
-    print(f"By type:               {dict(sorted(counts_by_type.items()))}")
-    if args.samples > 1:
-        print(f"Agreement (n_samples -> #facts): {dict(sorted(agree_hist.items()))}")
-    print(f"Pass coverage:")
-    for combo, n in sorted(pass_combo_counts.items(), key=lambda kv: -kv[1]):
-        print(f"  {combo:30s} {n}")
-    print(f"\nWritten: {merged_path}")
+    print("\n" + "=" * 70)
+    print(f"Per-lens facts (raw, summed over samples): {counts_by_lens}")
+    print(f"Passes generated: {len(active_passes)}  (samples: {args.samples})")
+    print(f"\nManifest: {manifest_path}")
+    print(f"Next: python ensemble_merge.py --workdir {workdir} "
+          f"[--config merge.yaml | --method subject|embed]")
 
 
 if __name__ == "__main__":
