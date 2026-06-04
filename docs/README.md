@@ -41,6 +41,7 @@ Pick a doc by audience or task. The repo root has only the project README, the C
 ## Design notes
 
 - [RLM paper comparison](design/rlm_paper_comparison.md) — how this system relates to (and diverges from) the published RLM paper.
+- [Chapter-extract consolidation (killed)](design/ChapterExtractConsolidation_killed.md) — why consolidating the three extract passes into one per-chapter extract regressed all three grounding docs, and the depth-vs-breadth lesson.
 
 ## Archive
 
