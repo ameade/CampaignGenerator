@@ -40,7 +40,11 @@ def parse_roleplay_quotes(text: str, source_file: str) -> list[dict]:
         )
         # Extract character name from speaker like "GM as Brewbarry" or "kostadis1 as Vukradin"
         char_match = re.search(r'\bas\s+(\w+)', speaker, re.IGNORECASE)
-        character = char_match.group(1) if char_match else speaker
+        if char_match:
+            character = char_match.group(1)
+        else:
+            # Strip a trailing "(Player Name)" parenthetical, e.g. "Daz (Mike Hall)" -> "Daz"
+            character = re.sub(r'\s*\([^)]+\)\s*$', '', speaker).strip()
 
         quotes.append({
             "source_file": source_file,
