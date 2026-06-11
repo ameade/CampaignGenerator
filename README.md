@@ -1,64 +1,66 @@
 # CampaignGenerator
 
-A D&D session-prep and post-session documentation toolkit powered by the [Claude API](https://docs.anthropic.com/). Generate encounter design documents, keep campaign canon consistent, and turn raw session transcripts into polished, multi-voice narrative documents.
+A D&D session-prep and post-session documentation toolkit powered by the [Claude API](https://docs.anthropic.com/). Runs as a **FastAPI + Vue 3 web UI** or a suite of **CLI tools** — generate encounter documents, keep campaign canon consistent, process Zoom VTT transcripts, and produce multi-voice narrative session documents.
 
 ---
 
-## What's in the box
+## What it does
 
-| Script | What it does |
+| Layer | What you get |
 |---|---|
-| `prep.py` | Session beat and session arc prep — the main planning tool |
-| `session_doc.py` | Post-session: five-pass pipeline producing a narrative + structured recap |
-| `vtt_summary.py` | Convert a Zoom `.vtt` transcript into a session summary |
-| `campaign_state.py` | Generate a grounding doc tracking completed content and NPC states |
-| `distill.py` | Synthesize session summaries into a living `world_state.md` |
-| `party.py` | Generate `party.md` from character sheets and summaries |
-| `planning.py` | Generate `planning.md` from NPC dossiers and arc scores |
-| `npc_table.py` | Generate a quick NPC reference table from campaign docs |
-| `query.py` | Search session summaries for a specific event, NPC, or topic |
-| `make_tracking.py` | Extract a tracking list from an adventure module |
-| `dnd_sheet.py` | Convert a D&D Beyond character sheet PDF to markdown |
-| `new_workspace.py` | Create a new campaign workspace directory |
-| `transform.py` | Convert NotebookLLM dossiers into `prep.py` input |
-
-All scripts share a common library (`campaignlib.py`) for API calls, file I/O, logging, and config loading.
-
-There's also a **Web UI** (FastAPI + Vue 3 — see [`docs/web/web_ui.md`](docs/web/web_ui.md)) that wraps every CLI tool and a separate **RLM retrieval pipeline** (rpglib + 5etools + MemPalace) exposed via `rpg_retriever.py`, `dossier_proposer.py`, and friends — see [`docs/rlm/rlm_pipeline.md`](docs/rlm/rlm_pipeline.md).
-
-For a fast tour of the codebase shape, start at [`docs/core/architecture.md`](docs/core/architecture.md). The full doc index is [`docs/README.md`](docs/README.md). For rules and conventions, [`CLAUDE.md`](CLAUDE.md).
+| **Web UI** | Browser dashboard — run every pipeline step, edit scene extractions, review narrations, manage config, visualize NPC connection graphs, and track VTT dialogue |
+| **CLI tools** | Python scripts for session prep, post-session pipelines, grounding-doc generation, and RPG library retrieval |
+| **RLM** | Retrieval pipeline over a local RPG library (5etools + MemPalace) — tiered search, dossier proposals, MCP tools |
 
 ---
 
 ## Setup
 
-**Requirements**: Python 3.10+
+**Requirements:** Python 3.10+, Node.js (web UI only), [uv](https://github.com/astral-sh/uv)
 
 ```bash
-pip install anthropic pyyaml pyperclip
+uv venv
+source .venv/bin/activate
+uv pip install anthropic pyyaml pyperclip pyvis fastapi uvicorn
 export ANTHROPIC_API_KEY=sk-ant-...
+```
+
+### Web UI
+
+```bash
+# Build the frontend and start the FastAPI server
+./startup
+```
+
+Then open `http://localhost:8000`.
+
+### CLI only
+
+No build step needed — run scripts from a campaign workspace:
+
+```bash
+python new_workspace.py ~/campaigns/mycamp --name "My Campaign"
+cd ~/campaigns/mycamp
+python ~/CampaignGenerator/prep.py --beat "The party enters Icespire Hold"
 ```
 
 ---
 
 ## Quick start
 
-### 1. Create a campaign workspace
+### 1. Create a workspace
 
 ```bash
 python new_workspace.py ~/campaigns/mycamp --name "My Campaign"
 cd ~/campaigns/mycamp
 ```
 
-This generates a `config.yaml` with absolute paths so every script can auto-detect it when run from the workspace directory.
+Generates a `config.yaml` with absolute paths — every script auto-detects it when run from the workspace directory. No `--config` flag needed.
 
-### 2. Session prep (before a session)
+### 2. Before a session — prep
 
 ```bash
-# Single beat — interactive
-python ~/CampaignGenerator/prep.py
-
-# Single beat — inline
+# Single encounter beat
 python ~/CampaignGenerator/prep.py --beat "The party enters Icespire Hold"
 
 # Three-stage pipeline: Lore Oracle → Encounter Architect → Voice Keeper
@@ -68,319 +70,132 @@ python ~/CampaignGenerator/prep.py --mode pipeline --beat "The party enters Ices
 python ~/CampaignGenerator/prep.py --session "1. Travel to Hold 2. Confront boss 3. Dragon reveal"
 ```
 
-### 3. Post-session documentation
+### 3. After a session — documentation pipeline
 
 ```bash
-# Convert the Zoom transcript to a session summary
+# Convert Zoom transcript to summary
 python ~/CampaignGenerator/vtt_summary.py session.vtt -o summaries/session_12.md
 
 # Regenerate grounding docs
 python ~/CampaignGenerator/campaign_state.py summaries.md -o docs/campaign_state.md
 python ~/CampaignGenerator/distill.py summaries.md -o docs/world_state.md
 
-# Generate the session document (see full details below)
-python ~/CampaignGenerator/session_doc.py session-recap \
-    --roleplay-extract-dir vtt_roleplay_extractions/ \
-    --summary-extract-dir  vtt_extractions/ \
-    --context docs/campaign_state.md docs/world_state.md docs/party.md \
-    --party   docs/party.md \
-    --characters "Aldric, Syreth, Mira, Gorvan" \
-    --output session-doc.md
+# Session doc pipeline — see sd_*.py section below
 ```
 
 ---
 
-## session_doc.py — Narrative session documents
+## Post-session narrative pipeline (`sd_*.py`)
 
-> **Recommended path: the 4-stage pipeline.** For new work, drive narration through `enhance_summary.py` → `scene_extract.py` → `session_doc.py --per-scene-output` → `assemble.py`, with a human-review checkpoint after each stage. See [`docs/cli/session_doc_pipeline.md`](docs/cli/session_doc_pipeline.md). The single-shot 5-pass flow described below still works and remains useful for quick iteration on a single character's voice.
-
-`session_doc.py` is the post-session centerpiece. It takes a raw recap and turns it into a document that reads like a novel chapter — each player character narrates a chronological slice of the session in their own first-person voice — followed by enhanced structured sections (Memorable Moments, Scenes, NPCs, etc.).
-
-### How it works
-
-Five sequential LLM passes:
+The recommended path for producing narrative session documents is a four-script pipeline with a human-review checkpoint after each stage:
 
 ```
-recap + VTT extractions + context docs
-            │
-    ┌───────▼────────┐
-    │  Pass 1        │  Consistency check (silent)
-    │                │  recap vs. campaign_state / world_state / party
-    └───────┬────────┘
-            │ consistency report
-    ┌───────▼────────┐
-    │  Pass 2        │  Enhance structured sections
-    │                │  Memorable Moments expanded; Scenes/NPCs preserved;
-    │                │  Consistency Notes appended. Summary intentionally omitted.
-    └───────┬────────┘
-            │ structured sections
-    ┌───────▼────────┐
-    │  Pass 3        │  Narrative plan
-    │                │  Assigns each character a chronological chunk range
-    │                │  and a one-sentence dramatic focus
-    └───────┬────────┘
-            │ plan
-    ┌───────▼────────┐
-    │  Pass 4 × N    │  Per-character extraction (silent)
-    │                │  Pulls only that character's moments from their chunks:
-    │                │  dialogue exchanges, action beats, environment
-    └───────┬────────┘
-            │ per-character moment lists
-    ┌───────▼────────┐
-    │  Pass 5 × N    │  Per-character narration
-    │                │  First-person prose, style-matched to examples,
-    │                │  with handoff sentence from the previous narrator
-    └───────┬────────┘
-            │
-    narrative sections + structured sections → final document
+VTT transcript + recap
+        │
+ enhance_summary.py   ← enhance raw summary
+        │
+ scene_extract.py     ← extract per-scene dialogue and action beats from VTT
+        │  [human review]
+ sd_consistency.py    ← Pass 1: consistency check vs. campaign state / world state
+        │
+ sd_plan.py           ← Pass 3: narrative plan — assigns characters to scene chunks
+        │  [human review]
+ sd_narrate.py        ← Pass 5: per-scene first-person narration in each character's voice
+        │  [human review]
+ assemble.py          ← combine narrated scenes into the final session document
 ```
 
-### Usage
+Each script is standalone — run it, review the output, then proceed. See [`docs/cli/session_doc_pipeline.md`](docs/cli/session_doc_pipeline.md) for flags, voice files, player-name mapping, token scaling, and design rationale.
 
-```bash
-python session_doc.py session-recap \
-    --roleplay-extract-dir vtt_roleplay_extractions/ \
-    --summary-extract-dir  vtt_extractions/ \
-    --context docs/campaign_state.md docs/world_state.md docs/party.md \
-    --party   docs/party.md \
-    --characters "Aldric, Syreth, Mira, Gorvan" \
-    --examples examples/bard_arrival.md \
-               examples/cleric_debate.md \
-               examples/druid_combat.md \
-               examples/barbarian_moment.md \
-    --output session-doc.md
-```
+---
 
-### Style examples (`--examples`)
+## Script reference
 
-The `--examples` flag injects excerpts from earlier, handcrafted session summaries as few-shot style references. One excerpt per character, covering different scene types (travel, combat, political comedy, emotional beat), produces the most reliable voice transfer.
+### Pre-session prep
 
-```bash
-# Create an examples directory in your workspace
-mkdir examples/
-# Write one .md file per character — a representative excerpt from a past session
-```
-
-The examples are injected into the narration system prompt under a `STYLE REFERENCE` block, with instructions to match voice, structure, and tone — not to copy content.
-
-### Per-character voice files (`--voice-dir`)
-
-Players can write short notes describing their character's inner voice, distinctive phrases, or narrative quirks. These are injected only into that character's narration pass.
-
-```bash
-mkdir voice/
-# Create one file per character: <name>_voice.md or <name>.md
-# e.g. voice/aldric_voice.md
-```
-
-```bash
-python session_doc.py session-recap \
-    --voice-dir voice/ \
-    ... (other flags)
-```
-
-Voice file example (`aldric_voice.md`):
-```markdown
-Aldric speaks in short, declarative sentences. He rarely explains his reasoning —
-he states what he's going to do and does it. When he reflects on his past, he uses
-physical metaphors (stones, weight, iron). He never says "feel" — he says "know."
-```
-
-### Flags
-
-| Flag | Effect |
+| Script | What it does |
 |---|---|
-| `--plan-only` | Stop after pass 3 and print the section assignments — verify coverage before committing |
-| `--fast` | Use Claude Haiku instead of Sonnet (~4× cheaper, good for iteration) |
-| `--no-log` | Skip saving the full log |
-| `--session-name` | Override the document title |
-| `--model` | Explicit model override |
+| `prep.py` | Session beat and arc prep — single mode or Lore Oracle → Encounter Architect → Voice Keeper pipeline |
+| `planning.py` | Generate `planning.md` from NPC dossiers and arc scores |
+| `npc_table.py` | Generate a quick NPC reference table (Name / Faction / State / Motivations) |
+| `query.py` | Search session summaries for a specific event, NPC, or topic |
 
-### Cost
+### Post-session pipeline
 
-A full Sonnet run costs roughly **$0.25–0.40** depending on session length. `--fast` (Haiku) costs roughly **$0.07**. `max_tokens` is a ceiling, not a cost driver — you pay for what's generated.
+| Script | What it does |
+|---|---|
+| `vtt_summary.py` | Zoom `.vtt` transcript → structured session summary |
+| `enhance_summary.py` | Enhance a raw session summary before extraction |
+| `enhance_recap.py` | Enhance a raw session recap |
+| `scene_extract.py` | Extract per-scene dialogue and action beats from VTT |
+| `sd_consistency.py` | Pipeline Pass 1 — consistency check vs. campaign docs |
+| `sd_plan.py` | Pipeline Pass 3 — narrative plan: assign characters to scene chunks |
+| `sd_narrate.py` | Pipeline Pass 5 — per-scene first-person narration |
+| `assemble.py` | Assemble narrated scenes into the final session document |
+| `quote_ledger.py` | SQLite-backed VTT dialogue tracking and speaker review |
+| `narrative.py` | Standalone experimental VTT-anchored narration CLI |
 
-For the technical design notes behind this pipeline (narrative bleed, chunk assignment, style transfer), see the "Design rationale" section of [`docs/cli/session_doc_pipeline.md`](docs/cli/session_doc_pipeline.md).
+### Grounding docs
 
----
+| Script | What it does |
+|---|---|
+| `campaign_state.py` | Generate a grounding doc tracking completed content and current NPC states |
+| `distill.py` | Synthesize session summaries → living `world_state.md` |
+| `party.py` | Generate `party.md` from character sheets, summaries, and arc scores |
 
-## prep.py — Session prep
+### RPG Library Module (RLM)
 
-Generates encounter design documents from a session beat or numbered session outline. Three modes:
+| Script | What it does |
+|---|---|
+| `rpg_retriever.py` | Tiered retrieval from local RPG library (drawer / statblock / cost-tagged candidate) |
+| `dossier_proposer.py` | Run retrieval → write `docs/dossier_proposal.md` for human approval |
+| `fivetools_catalog.py` | Mtime-cached name index over canonical 5etools data |
+| `fivetools_ingest.py` | Ingest 5etools JSON into MemPalace drawers |
+| `convert_book.py` | PDF → 5etools JSON (pdf-translators) |
+| `mcp_server.py` | MCP server — `rpg_search`, `propose_dossier`, `suggest_conversion` tools |
+| `mempalace_client.py` | MemPalace MCP write client |
 
-- **`single`** (default): one API call, one encounter document
-- **`pipeline`**: three sequential calls — Lore Oracle → Encounter Architect → Voice Keeper
+### Utilities
 
-The pipeline's Lore Oracle verifies the beat against campaign canon and returns `CLEAR` / `FLAGS` / `GAPS`. If it flags issues, you're prompted before continuing.
-
-```bash
-python prep.py --beat "The party enters Icespire Hold"
-python prep.py --mode pipeline --beat "The party enters Icespire Hold"
-python prep.py --session "1. Arrival 2. Boss fight 3. Reveal"
-python prep.py --clipboard --beat "..."   # copy prompt to clipboard instead
-```
-
----
-
-## Other scripts
-
-### vtt_summary.py
-
-Converts a Zoom `.vtt` transcript into a structured session summary using a two-pass extract → synthesize pipeline.
-
-```bash
-python vtt_summary.py session.vtt -o summaries/session_12.md
-python vtt_summary.py session.vtt --date "2026-03-15" --session-name "Session 12 — Icespire Hold"
-python vtt_summary.py --synthesize-only --extract-dir vtt_extractions/ -o out.md
-```
-
-### campaign_state.py
-
-Generates a grounding document tracking completed content and current NPC states. Prevents prep tools from hallucinating completed content as still active.
-
-```bash
-python campaign_state.py summaries.md --output docs/campaign_state.md
-
-# With a tracking list to ensure specific events are flagged if missing
-python campaign_state.py summaries.md \
-    --track-file docs/tracking.txt \
-    --output docs/campaign_state.md
-```
-
-### distill.py
-
-Synthesizes a large session-summary file into a structured `world_state.md` via extract → synthesize.
-
-```bash
-python distill.py summaries.md --output docs/world_state.md
-python distill.py --synthesize-only --extract-dir docs/distill_extractions --output docs/world_state.md
-```
-
-### party.py
-
-Generates `party.md` from character sheets, session summaries, and arc score mechanics.
-
-```bash
-python party.py \
-    --character docs/characters/soma.md docs/characters/vukradin.md \
-    --summaries summaries.md \
-    --arc-scores soma_arc.md vukradin_arc.md \
-    --output docs/party.md
-```
-
-### planning.py
-
-Generates `planning.md` from NPC dossiers and arc score documents.
-
-```bash
-# Build per-NPC dossier files from summaries (review and edit before synthesizing)
-python planning.py --summaries summaries.md --build-dossiers --dossier-dir docs/npcs/
-
-# Synthesize planning doc from dossiers
-python planning.py \
-    --npc docs/npcs/*.md \
-    --arc-scores arc_scores/*.md \
-    --output docs/planning.md
-```
-
-### query.py
-
-Ad-hoc search: find whether a specific event, NPC, or detail appears in your session summaries.
-
-```bash
-python query.py summaries.md "Did the party clear Gnomengarde?"
-python query.py summaries.md "What happened with the stone giants?"
-python query.py summaries.md "Xanth" --hits-only   # raw matching extracts only
-```
-
-### dnd_sheet.py
-
-Converts a D&D Beyond character sheet PDF to structured markdown using Claude's vision API.
-
-```bash
-python dnd_sheet.py Aldric.pdf --output aldric.md
-python dnd_sheet.py *.pdf --output-dir docs/characters/
-```
-
-### make_tracking.py
-
-Extracts a tracking list from an adventure module markdown for use with `campaign_state.py`.
-
-```bash
-python make_tracking.py "adventure.md" --output docs/tracking.txt
-# Review the output before use — remove events that haven't happened yet
-```
-
-### npc_table.py
-
-Generates a quick NPC reference table (Name / Faction / Current State / Motivations).
-
-```bash
-python npc_table.py
-python npc_table.py --docs world_state planning
-python npc_table.py --output npc_state.md
-```
+| Script | What it does |
+|---|---|
+| `new_workspace.py` | Create a new campaign workspace with a `config.yaml` |
+| `dnd_sheet.py` | D&D Beyond character sheet PDF → markdown (vision API) |
+| `make_tracking.py` | Extract trackable events from an adventure module |
+| `transform.py` | Convert NotebookLLM dossiers to `prep.py` input |
 
 ---
 
-## Typical workflow
+## RLM — RPG Library Module
 
-```bash
-# 1. Create workspace
-python new_workspace.py ~/campaigns/mycamp --name "My Campaign"
-cd ~/campaigns/mycamp
+The RLM pipeline lets prep and narration tools pull statblocks, encounter tables, and canon lore from a local library without hallucination:
 
-# 2. Convert character sheets
-python ~/CampaignGenerator/dnd_sheet.py *.pdf --output-dir docs/characters/
+1. **Retrieve** — `rpg_retriever.py` searches in tiers: MemPalace drawer → statblock → cost-tagged candidate
+2. **Propose** — `dossier_proposer.py` writes `docs/dossier_proposal.md` — a ranked candidate list for human review and approval
+3. **Render** — approved proposals are consumed by render pipelines (`prep.py`, `sd_narrate.py`, `planning.py`)
 
-# 3. Extract tracking list from adventure module
-python ~/CampaignGenerator/make_tracking.py "adventure.md" --output docs/tracking.txt
-# (review and edit tracking.txt)
+The human checkpoint between retrieval and rendering is enforced by a CI test — render pipelines cannot call retrieval functions directly. See [`docs/rlm/rlm_pipeline.md`](docs/rlm/rlm_pipeline.md) and [`docs/rlm/rlm_architecture.md`](docs/rlm/rlm_architecture.md).
 
-# 4. Generate grounding docs from session summaries
-python ~/CampaignGenerator/campaign_state.py summaries.md \
-    --track-file docs/tracking.txt --output docs/campaign_state.md
-python ~/CampaignGenerator/distill.py summaries.md --output docs/world_state.md
-python ~/CampaignGenerator/party.py \
-    --character docs/characters/*.md \
-    --summaries summaries.md --output docs/party.md
+---
 
-# 5. Run session prep
-python ~/CampaignGenerator/prep.py --beat "The party arrives at Icespire Hold"
+## Docs
 
-# --- After the session ---
-
-# 6. Convert transcript
-python ~/CampaignGenerator/vtt_summary.py session.vtt -o summaries/session_12.md
-
-# 7. Regenerate grounding docs
-python ~/CampaignGenerator/campaign_state.py summaries.md --output docs/campaign_state.md
-python ~/CampaignGenerator/distill.py summaries.md --output docs/world_state.md
-
-# 8. Generate session document
-python ~/CampaignGenerator/session_doc.py session-12-recap \
-    --roleplay-extract-dir vtt_roleplay_extractions/ \
-    --summary-extract-dir  vtt_extractions/ \
-    --context docs/campaign_state.md docs/world_state.md docs/party.md \
-    --party   docs/party.md \
-    --characters "Aldric, Syreth, Mira, Gorvan" \
-    --examples examples/*.md \
-    --voice-dir voice/ \
-    --output docs/session_12.md
-```
+| File | Contents |
+|---|---|
+| [`docs/core/architecture.md`](docs/core/architecture.md) | System map — layers, pipelines, on-disk state, "start here" table |
+| [`docs/cli/session_doc_pipeline.md`](docs/cli/session_doc_pipeline.md) | Post-session pipeline: flags, voice files, player-name mapping, token scaling, design rationale |
+| [`docs/cli/cli_tools.md`](docs/cli/cli_tools.md) | Per-script flags and typical new-campaign workflow |
+| [`docs/web/web_ui.md`](docs/web/web_ui.md) | Web UI: pages, Session Doc Editor, Quote Ledger, Connection Graph |
+| [`docs/rlm/rlm_pipeline.md`](docs/rlm/rlm_pipeline.md) | RLM three-state retrieval, ingest flow, MCP tools |
+| [`docs/README.md`](docs/README.md) | Full doc index |
 
 ---
 
 ## Config
 
-All scripts auto-detect config: they look for `config.yaml` in the current working directory first, then fall back to `config/config.yaml` in the script directory. Running from a workspace directory is the recommended pattern — no `--config` flag needed.
+All scripts auto-detect config: CWD `config.yaml` first, then `config/config.yaml` in the script directory. Running from a campaign workspace means no `--config` flag needed.
 
-```bash
-cd ~/campaigns/mycamp
-python ~/CampaignGenerator/prep.py --beat "..."   # auto-detects config.yaml
-```
-
-Override with `--config path/to/config.yaml` if needed.
+Override with `--config path/to/config.yaml` when necessary.
 
 ---
 
@@ -394,11 +209,11 @@ python -m pytest tests/
 
 ## Model choice
 
-All scripts default to **Claude Sonnet** and accept `--model` for overrides. `session_doc.py` and `narrative.py` also accept `--fast` to use **Claude Haiku** (~4× cheaper), which is useful for iterating on prompts before a final run.
+All scripts default to **Claude Sonnet** (`claude-sonnet-4-6`) and accept `--model` for overrides. Narration scripts accept `--fast` for **Claude Haiku** (~4× cheaper), useful for iterating before a final run.
 
 ```bash
-python session_doc.py ... --fast      # Haiku — iterate quickly
-python session_doc.py ... --model claude-opus-4-7   # Opus — highest quality
+python sd_narrate.py ... --fast                       # Haiku — iterate quickly
+python sd_narrate.py ... --model claude-opus-4-8      # Opus — highest quality
 ```
 
 ---
