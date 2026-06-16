@@ -143,6 +143,49 @@ Each script is standalone — run it, review the output, then proceed. See [`doc
 | `distill.py` | Synthesize session summaries → living `world_state.md` |
 | `party.py` | Generate `party.md` from character sheets, summaries, and arc scores |
 
+### Kanka CE integration
+
+[Kanka Community Edition](https://github.com/owlkeep/kanka) is a self-hosted campaign wiki. Three scripts bridge it to CampaignGenerator's grounding layer:
+
+| Script | Direction | Description |
+|---|---|---|
+| `kanka_sync.py` | Kanka → `world_state.md` | Pull all NPCs, factions, locations, events, notes into a grounding doc |
+| `kanka_push.py` | `world_state.md` → Kanka | Push an edited grounding doc back (create or update; never delete; dry-run by default) |
+| `kanka_mcp.py` | MCP server | Expose pull/push as MCP tools (`kanka_pull`, `kanka_push_preview`, `kanka_push_apply`) |
+
+**Setup:**
+
+```bash
+export KANKA_TOKEN=<your-api-token>
+export KANKA_BASE_URL=http://localhost:8081   # default; omit if correct
+
+# Pull Kanka campaign 1 → scratch file, review, then promote
+python kanka_sync.py --campaign 1 --output /tmp/world_state.generated.md
+
+# Push edited world_state.md back → dry run (safe default; shows plan, writes nothing)
+python kanka_push.py --campaign 1 --input docs/world_state.md
+
+# Commit the push
+python kanka_push.py --campaign 1 --input docs/world_state.md --apply
+```
+
+**MCP wiring** (`.mcp.json`):
+
+```json
+{
+  "mcpServers": {
+    "kanka": {
+      "command": "python",
+      "args": ["kanka_mcp.py"],
+      "env": {
+        "KANKA_TOKEN": "<your-api-token>",
+        "KANKA_BASE_URL": "http://localhost:8081"
+      }
+    }
+  }
+}
+```
+
 ### RPG Library Module (RLM)
 
 | Script | What it does |
