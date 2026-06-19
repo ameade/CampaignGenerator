@@ -39,7 +39,7 @@ def test_base_dir_override_wins_over_repo_default(tmp_path, monkeypatch):
     fake_repo = tmp_path / "repo"
     fake_repo.mkdir()
     _write(fake_repo, "plan", "REPO copy")
-    monkeypatch.setattr(campaignlib, "__file__", str(fake_repo / "campaignlib.py"))
+    monkeypatch.setattr(campaignlib.config, "__file__", str(fake_repo / "campaignlib" / "config.py"))
 
     override = tmp_path / "campaign"
     _write(override, "plan", "OVERRIDE copy")
@@ -51,7 +51,7 @@ def test_falls_back_to_repo_default(tmp_path, monkeypatch):
     fake_repo = tmp_path / "repo"
     fake_repo.mkdir()
     _write(fake_repo, "narrate", "from the repo default")
-    monkeypatch.setattr(campaignlib, "__file__", str(fake_repo / "campaignlib.py"))
+    monkeypatch.setattr(campaignlib.config, "__file__", str(fake_repo / "campaignlib" / "config.py"))
 
     empty_override = tmp_path / "campaign"
     empty_override.mkdir()
@@ -62,7 +62,7 @@ def test_falls_back_to_repo_default(tmp_path, monkeypatch):
 def test_missing_file_raises_clear_error(tmp_path, monkeypatch):
     fake_repo = tmp_path / "repo"
     fake_repo.mkdir()
-    monkeypatch.setattr(campaignlib, "__file__", str(fake_repo / "campaignlib.py"))
+    monkeypatch.setattr(campaignlib.config, "__file__", str(fake_repo / "campaignlib" / "config.py"))
 
     with pytest.raises(FileNotFoundError) as exc:
         load_agent_prompt("nope", base_dir=tmp_path / "campaign")
@@ -131,7 +131,7 @@ def test_nested_name_resolves_to_subdir(tmp_path):
 def test_cwd_used_when_base_dir_unset(tmp_path, monkeypatch):
     fake_repo = tmp_path / "repo"
     fake_repo.mkdir()
-    monkeypatch.setattr(campaignlib, "__file__", str(fake_repo / "campaignlib.py"))
+    monkeypatch.setattr(campaignlib.config, "__file__", str(fake_repo / "campaignlib" / "config.py"))
 
     cwd_root = tmp_path / "cwd"
     _write(cwd_root, "cwd_only", "loaded from CWD")
