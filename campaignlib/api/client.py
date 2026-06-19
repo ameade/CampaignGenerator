@@ -87,14 +87,19 @@ def _is_retryable(exc) -> bool:
     return False
 
 
-def call_api(client, system: str, content, model: str, max_tokens: int = 8096) -> str:
+def call_api(client, system: str, content, model: str, max_tokens: int = 8096,
+             thinking: bool | None = None) -> str:
     """Non-streaming API call. Returns full response text.
 
     content — a string or a list of content blocks (for multimodal/vision calls).
+    thinking — per-call reasoning intent for the DGX backend (None = the model's
+    registry default); ignored for the Anthropic / Claude Code backends.
     Retries on transient errors (rate limit, overload, connection) with exponential backoff.
     """
     import time
     messages = [{"role": "user", "content": content}]
+    # `thinking` is a DGX-only knob; the real Anthropic SDK would reject it.
+    extra = {"thinking": thinking} if isinstance(client, _OpenAICompatClient) else {}
     delays = [10, 20, 40]
     for attempt, delay in enumerate([-1] + delays):
         if delay >= 0:
@@ -107,6 +112,7 @@ def call_api(client, system: str, content, model: str, max_tokens: int = 8096) -
                 max_tokens=max_tokens,
                 system=system,
                 messages=messages,
+                **extra,
             )
             return response.content[0].text
         except Exception as e:
@@ -149,7 +155,7 @@ def call_api_with_tools(client, *, system: str, messages: list, tools: list,
 
 def stream_api(client, system, user: str, model: str, max_tokens: int = 8096,
                silent: bool = False, verbose: bool = False,
-               cache_system: bool = False) -> str:
+               cache_system: bool = False, thinking: bool | None = None) -> str:
     """Stream a Claude API call, printing each token as it arrives. Returns full response.
 
     Retries on transient errors (rate limit, overload, connection) with exponential backoff
@@ -180,6 +186,8 @@ def stream_api(client, system, user: str, model: str, max_tokens: int = 8096,
     else:
         system_arg = system
 
+    # `thinking` is a DGX-only knob; the real Anthropic SDK would reject it.
+    extra = {"thinking": thinking} if isinstance(client, _OpenAICompatClient) else {}
     delays = [60, 120, 240]  # seconds to wait before each retry
     for attempt, delay in enumerate([-1] + delays):
         if delay >= 0:
@@ -193,6 +201,7 @@ def stream_api(client, system, user: str, model: str, max_tokens: int = 8096,
                 max_tokens=max_tokens,
                 system=system_arg,
                 messages=[{"role": "user", "content": user}],
+                **extra,
             ) as stream:
                 for text in stream.text_stream:
                     if not silent:
