@@ -111,28 +111,31 @@ class _OpenAICompatMessages:
             return DGX_DEFAULT_MODEL
         return model
 
-    def create(self, *, model, max_tokens, system, messages, tools=None, **_ignored):
+    def create(self, *, model, max_tokens, system, messages, tools=None,
+               thinking=None, **_ignored):
         if tools:
             raise NotImplementedError(
                 "tool use is not supported on the DGX endpoint — drop --dgx-endpoint "
                 "for paths that need tools (e.g. enhance_recap with tools enabled)."
             )
+        resolved = self._resolve_model(model)
         resp = self._client.oai.chat.completions.create(
-            model=self._resolve_model(model),
+            model=resolved,
             max_tokens=max_tokens,
             messages=_anthropic_to_openai_messages(system, messages),
-            extra_body=self._client.extra_body or None,
+            extra_body=self._client.extra_body_for(resolved, thinking) or None,
         )
         text = resp.choices[0].message.content or ""
         return _OpenAICompatResponse(text)
 
-    def stream(self, *, model, max_tokens, system, messages, **_ignored):
+    def stream(self, *, model, max_tokens, system, messages, thinking=None, **_ignored):
+        resolved = self._resolve_model(model)
         return _OpenAICompatStream(
             self._client.oai,
-            model=self._resolve_model(model),
+            model=resolved,
             max_tokens=max_tokens,
             messages=_anthropic_to_openai_messages(system, messages),
-            extra_body=self._client.extra_body,
+            extra_body=self._client.extra_body_for(resolved, thinking),
         )
 
 
@@ -155,26 +158,43 @@ class _OpenAICompatClient:
         base_url = endpoint.rstrip("/")
         if not base_url.endswith("/v1"):
             base_url = base_url + "/v1"
+        try:
+            import dgxlib
+        except ImportError:
+            print("Error: dgxlib not installed. Run: pip install -e ~/src/dgx",
+                  file=sys.stderr)
+            sys.exit(1)
+        self._dgxlib = dgxlib
+        self.model_override = model_override or os.environ.get("DGX_MODEL") or DGX_DEFAULT_MODEL
+        # Per-model request behavior comes from the dgxlib registry (one source of
+        # truth, edited next to the Spark spin-up scripts) — not inline here.
+        cfg = dgxlib.resolve_model_config(self.model_override)
         # Explicit timeouts. A local vLLM box that is wedged, overloaded, or —
         # the case that actually bit us — frozen by a host sleep leaves the TCP
         # socket half-open: the peer is gone, no RST ever arrives, and a blocked
         # read() never returns, so the call hangs forever. A read timeout makes a
         # stalled/stale connection raise httpx.ReadTimeout (which stream_api
         # treats as retryable and reopens on a fresh socket) in minutes, not
-        # never. Read budget is deliberately generous — token-to-token gaps are
-        # sub-second, so 300s only fires on a genuinely dead stream; connect
-        # fails fast. Override the read budget with DGX_READ_TIMEOUT.
+        # never. The budget is the model's registry read_timeout; DGX_READ_TIMEOUT
+        # still overrides it.
         import httpx
-        read_timeout = float(os.environ.get("DGX_READ_TIMEOUT", "300"))
+        env_to = os.environ.get("DGX_READ_TIMEOUT")
+        read_timeout = float(env_to) if env_to else cfg.read_timeout
         timeout = httpx.Timeout(connect=10.0, read=read_timeout, write=30.0, pool=30.0)
         self.oai = OpenAI(base_url=base_url, api_key=api_key, timeout=timeout)
-        self.model_override = model_override or os.environ.get("DGX_MODEL") or DGX_DEFAULT_MODEL
-        self.extra_body = (
-            {"chat_template_kwargs": {"enable_thinking": False}}
-            if os.environ.get("DGX_NO_THINKING")
-            else {}
-        )
         self.messages = _OpenAICompatMessages(self)
+
+    def extra_body_for(self, resolved_model: str, thinking: bool | None) -> dict:
+        """Per-call request extras (e.g. enable_thinking) from the dgxlib registry.
+
+        ``thinking`` is a per-call decision: ``None`` uses the model's registry
+        default; ``True``/``False`` overrides it (honored only for reasoning-capable
+        models). ``DGX_NO_THINKING`` forces it off for back-compat when the caller
+        did not specify.
+        """
+        if thinking is None and os.environ.get("DGX_NO_THINKING"):
+            thinking = False
+        return self._dgxlib.resolve_model_config(resolved_model, thinking=thinking).extra_body
 
 
 # ── Claude Code (subscription) backend ──────────────────────────────────────
