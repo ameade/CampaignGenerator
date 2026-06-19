@@ -53,7 +53,7 @@ class FakeStreamAPI:
 @pytest.fixture
 def fake_stream_api(monkeypatch):
     fake = FakeStreamAPI()
-    monkeypatch.setattr(campaignlib, "stream_api", fake)
+    monkeypatch.setattr(campaignlib.pipelines, "stream_api", fake)
     monkeypatch.setattr(campaign_state, "make_client", lambda: None)
     return fake
 

@@ -59,7 +59,7 @@ class FakeStreamAPI:
 @pytest.fixture
 def fake_stream_api(monkeypatch):
     fake = FakeStreamAPI()
-    monkeypatch.setattr(campaignlib, "stream_api", fake)
+    monkeypatch.setattr(campaignlib.pipelines, "stream_api", fake)
     # planning.py imports stream_api directly; also stub that binding.
     monkeypatch.setattr(planning, "stream_api", fake)
     monkeypatch.setattr(planning, "make_client", lambda: None)

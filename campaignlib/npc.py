@@ -1,0 +1,240 @@
+"""NPC dossier parsing, alias normalization, and player/speaker mapping."""
+
+import re
+import sys
+from pathlib import Path
+
+
+_DOSSIER_FRONTMATTER_RE = re.compile(r"\A---\n(.*?)\n---\n\n?(.*)\Z", re.DOTALL)
+
+
+def parse_dossier(path: "Path") -> tuple[str, list[str], list[int], str]:
+    """Return (canonical_name, aliases, source_extracts, body_without_frontmatter).
+
+    `source_extracts` is the list of dossier_extract_NNN numbers already
+    absorbed into this dossier (used by planning.py's sidecar dedup).
+    Missing or malformed → empty list.
+
+    Dossiers without frontmatter fall back to (filename_stem, [], [], full_text).
+    """
+    try:
+        import yaml
+    except ImportError:
+        print("Error: pyyaml not installed. Run: pip install pyyaml", file=sys.stderr)
+        sys.exit(1)
+    text = path.read_text(encoding="utf-8")
+    m = _DOSSIER_FRONTMATTER_RE.match(text)
+    if not m:
+        return (path.stem, [], [], text)
+    try:
+        meta = yaml.safe_load(m.group(1)) or {}
+    except yaml.YAMLError:
+        return (path.stem, [], [], text)
+    name = meta.get("name") or path.stem
+    aliases = meta.get("aliases") or []
+    if not isinstance(aliases, list):
+        aliases = []
+    source_extracts = meta.get("source_extracts") or []
+    if not isinstance(source_extracts, list):
+        source_extracts = []
+    source_extracts = [
+        int(n) for n in source_extracts
+        if isinstance(n, int) or (isinstance(n, str) and n.isdigit())
+    ]
+    return (str(name), [str(a) for a in aliases], source_extracts, m.group(2))
+
+
+def normalize_npc_key(name: str) -> str:
+    """Lowercase, strip punctuation, collapse whitespace — for alias-key lookups.
+
+    LLM-emitted variants like "Harbin (Townmaster)" must match flat aliases
+    like "Harbin Townmaster". Without normalization the parens block lookup.
+    """
+    s = re.sub(r"[\(\)\[\]\'\"`\-]", "", name.lower())
+    s = re.sub(r"\s+", " ", s).strip()
+    return s
+
+
+def build_alias_normalizer(
+    canonical_to_aliases: dict[str, list[str]],
+):
+    """Return (normalize(text) -> text, [(canonical, aliases), ...]).
+
+    The returned `normalize` rewrites any alias occurrence in `text` to
+    its canonical name. Whole-word, case-insensitive, longest-first
+    (so "Captain Tolubb" wins over "Tolubb" when both are aliases).
+
+    An empty map yields an identity function and an empty entries list,
+    so every extractor can call this unconditionally.
+    """
+    alias_to_canonical: dict[str, str] = {}
+    for canonical, aliases in canonical_to_aliases.items():
+        for alias in aliases:
+            alias_to_canonical[alias.lower()] = canonical
+
+    if not alias_to_canonical:
+        return (lambda text: text, [])
+
+    sorted_aliases = sorted(alias_to_canonical.keys(), key=len, reverse=True)
+    pattern = re.compile(
+        r"\b(" + "|".join(re.escape(a) for a in sorted_aliases) + r")\b",
+        flags=re.IGNORECASE,
+    )
+
+    def normalize(text: str) -> str:
+        return pattern.sub(lambda m: alias_to_canonical[m.group(0).lower()], text)
+
+    entries = [(c, a) for c, a in canonical_to_aliases.items() if a]
+    return (normalize, entries)
+
+
+def load_alias_map(dossier_dir) -> dict[str, list[str]]:
+    """Scan `dossier_dir` for `*.md` dossiers; return `{canonical: [aliases]}`.
+
+    Returns `{}` when `dossier_dir` is None, missing, or contains no
+    dossiers — makes the caller a no-op for campaigns without planning.
+    """
+    if dossier_dir is None:
+        return {}
+    d = Path(dossier_dir).expanduser()
+    if not d.is_dir():
+        return {}
+    result: dict[str, list[str]] = {}
+    for f in sorted(d.glob("*.md")):
+        # Skip sidecar files — they're not canonical dossiers.
+        if ".new_notes." in f.name:
+            continue
+        name, aliases, _, _ = parse_dossier(f)
+        result[name] = aliases
+    return result
+
+
+_PLAYER_PLACEHOLDERS = {
+    "", "not specified", "(not specified)", "[not specified]",
+    "n/a", "na", "none", "unknown", "tbd",
+}
+
+
+def _is_player_placeholder(name: str) -> bool:
+    return name.strip().lower().strip("()[]").strip() in _PLAYER_PLACEHOLDERS
+
+
+def extract_player_character_map(party_text: str) -> dict[str, str]:
+    """Parse party.md and return {player_name: character_name}.
+
+    Supports two heading + info-line shapes:
+
+    Old (single bold span):
+        ## Soma
+        **Tortle Druid 5, Player: Wade**
+
+    New (party.py output, multiple bold spans separated by ``|``):
+        ### Soma — Druid 5
+        **Class/Level:** Druid 5 | **Species:** Tortle | **Player:** Wade
+
+    When the Player slot holds multiple names separated by ``/`` or
+    ``,``, both names map to the same character. Placeholder values
+    like ``(Not specified)`` / ``[not specified]`` / ``N/A`` are
+    treated as missing.
+    """
+    result: dict[str, str] = {}
+    current_name: str | None = None
+
+    def _record_players(raw: str) -> None:
+        if _is_player_placeholder(raw):
+            return
+        for p in re.split(r'[/,]', raw):
+            p = p.strip().rstrip('*').strip()
+            if p and not _is_player_placeholder(p) and current_name:
+                result[p] = current_name
+
+    for line in party_text.splitlines():
+        stripped = line.strip()
+        m = re.match(r'^#{2,3}\s+(.+)$', stripped)
+        if m:
+            heading = m.group(1).strip()
+            current_name = re.split(r'\s+[—–-]\s+', heading, maxsplit=1)[0].strip()
+            continue
+        if not current_name:
+            continue
+        new_pm = re.search(r'\*\*Player:\*\*\s*([^|]+?)(?:\s*\||\s*$)', stripped)
+        if new_pm:
+            _record_players(new_pm.group(1))
+            current_name = None
+            continue
+        cm = re.match(r'^\*\*(.+\d+.+)\*\*$', stripped)
+        if cm:
+            pm = re.search(r',\s*Player:\s*(.+)', cm.group(1))
+            if pm:
+                _record_players(pm.group(1))
+            current_name = None
+
+    # First-name aliases: if a player's recorded name is "Joe Beda" → also map
+    # "Joe" → that character. Skip when the first name is ambiguous (two
+    # players share it but map to different characters) so we don't pick one
+    # arbitrarily. Existing full-name keys always win.
+    first_name_to_chars: dict[str, set[str]] = {}
+    for player, char in result.items():
+        first = player.split()[0] if player.split() else ""
+        if first and first != player:
+            first_name_to_chars.setdefault(first, set()).add(char)
+    for first, chars in first_name_to_chars.items():
+        if len(chars) == 1 and first not in result:
+            result[first] = next(iter(chars))
+
+    return result
+
+
+def normalize_vtt_speakers(
+    vtt_text: str,
+    player_map: dict[str, str] | None = None,
+    gm_player: str | None = None,
+) -> str:
+    """Rewrite speaker labels at the start of VTT lines.
+
+    Maps each ``Player Name:`` prefix to the corresponding character
+    name from ``player_map``. ``gm_player`` (if given) is rewritten to
+    ``GM`` regardless of any party.md entry. Longer names match first
+    so a player named ``Mike`` and a player named ``Mike Hall`` are
+    both handled correctly.
+
+    Body text is untouched — only labels at the start of a dialogue
+    line are rewritten. This is a deterministic preprocessing step the
+    LLM never sees and never has to derive itself.
+    """
+    if not player_map and not gm_player:
+        return vtt_text
+    full_map = dict(player_map or {})
+    if gm_player:
+        full_map[gm_player] = "GM"
+    sorted_keys = sorted(full_map.keys(), key=len, reverse=True)
+    out_lines: list[str] = []
+    for line in vtt_text.splitlines():
+        for key in sorted_keys:
+            prefix = f"{key}:"
+            if line.startswith(prefix):
+                line = f"{full_map[key]}:" + line[len(prefix):]
+                break
+        out_lines.append(line)
+    return "\n".join(out_lines)
+
+
+def format_npc_roster(alias_map: dict[str, list[str]]) -> str:
+    """Render an alias map as a 'Known NPCs' block to append to an extract prompt.
+
+    Returns '' when the map is empty, so callers can write:
+        system = BASE + ("\\n\\n" + roster if roster else "")
+    """
+    if not alias_map:
+        return ""
+    lines = [
+        "Known NPCs in this campaign — use these exact canonical names when an NPC "
+        "appears in the source text, even if the text uses a variant:"
+    ]
+    for canonical in sorted(alias_map):
+        aliases = alias_map[canonical]
+        if aliases:
+            lines.append(f"- {canonical} (also: {', '.join(aliases)})")
+        else:
+            lines.append(f"- {canonical}")
+    return "\n".join(lines)
