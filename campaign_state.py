@@ -152,6 +152,11 @@ def main() -> None:
                              "'Known NPCs' roster seeds the system prompts.")
     parser.add_argument("--model", default=DEFAULT_MODEL,
                         help="Claude model to use")
+    parser.add_argument("--dump-input", default=None, metavar="FILE",
+                        help="Write the synthesis prompt to FILE (and FILE.system.md) "
+                             "without making an API call — for use with `claude -p`.")
+    parser.add_argument("--dump-only", action="store_true",
+                        help="With --dump-input: stop after writing the dump, making no API call.")
     args = parser.parse_args()
 
     if args.synthesize_only and args.extract_only:
@@ -243,8 +248,13 @@ def main() -> None:
         model=args.model,
         input_normalizer=normalize,
         system_suffix=roster,
+        dump_input=args.dump_input,
+        dump_only=args.dump_only,
     )
     print("=" * 60)
+
+    if args.dump_only:
+        return
 
     output.parent.mkdir(parents=True, exist_ok=True)
     output.write_text(state_doc.strip() + "\n", encoding="utf-8")

@@ -500,6 +500,8 @@ def run_synthesize(
     extract_files: list[Path],
     context_files: list[Path],
     model: str,
+    dump_input: str | None = None,
+    dump_only: bool = False,
 ) -> str:
     parts = []
 
@@ -556,6 +558,17 @@ def run_synthesize(
         system_prompt = resolution_block + SYNTHESIZE_SYSTEM
         print(f"  Alias map: {len(resolution_entries)} NPC(s) with variants.")
 
+    if dump_input:
+        dump_path = Path(dump_input).expanduser().resolve()
+        dump_path.write_text(user_prompt, encoding="utf-8")
+        system_path = dump_path.with_suffix(dump_path.suffix + ".system.md")
+        system_path.write_text(system_prompt, encoding="utf-8")
+        print(f"Dumped synthesis input: {dump_path}")
+        print(f"Dumped system prompt:   {system_path}")
+        if dump_only:
+            print("[--dump-only: stopping before the API call]")
+            return ""
+
     print(f"  Synthesizing ({len(user_prompt):,} chars total)...")
     print("  " + "─" * 56)
     result = stream_api(client, system_prompt, user_prompt, model)
@@ -598,6 +611,8 @@ def run_synthesize_with_config(
     extract_files: list[Path],
     context_files: list[Path],
     model: str,
+    dump_input: str | None = None,
+    dump_only: bool = False,
 ) -> str:
     """Synthesize using the per-entity planning-config rendering. Mirrors
     party.py's --party-config path: each NPC/faction in the config is a
@@ -652,6 +667,17 @@ def run_synthesize_with_config(
         )
         system_prompt = resolution_block + SYNTHESIZE_SYSTEM
         print(f"  Alias map: {len(resolution_entries)} NPC(s) with variants.")
+
+    if dump_input:
+        dump_path = Path(dump_input).expanduser().resolve()
+        dump_path.write_text(user_prompt, encoding="utf-8")
+        system_path = dump_path.with_suffix(dump_path.suffix + ".system.md")
+        system_path.write_text(system_prompt, encoding="utf-8")
+        print(f"Dumped synthesis input: {dump_path}")
+        print(f"Dumped system prompt:   {system_path}")
+        if dump_only:
+            print("[--dump-only: stopping before the API call]")
+            return ""
 
     print(f"  Synthesizing ({len(user_prompt):,} chars total)...")
     print("  " + "─" * 56)
@@ -717,6 +743,11 @@ def main() -> None:
                         help="Refuse to run the synthesize pass unless "
                              "<campaign-dir>/docs/dossier_proposal.md exists "
                              "and has been approved.")
+    parser.add_argument("--dump-input", default=None, metavar="FILE",
+                        help="Write the synthesis prompt to FILE (and FILE.system.md) "
+                             "without making an API call — for use with `claude -p`.")
+    parser.add_argument("--dump-only", action="store_true",
+                        help="With --dump-input: stop after writing the dump, making no API call.")
     args = parser.parse_args()
 
     # Resolve the proposal check BEFORE the synthesize render call.
@@ -886,12 +917,19 @@ def main() -> None:
         planning_doc = run_synthesize_with_config(
             client, planning_config, npc_files,
             extract_files, context_files, args.model,
+            dump_input=args.dump_input,
+            dump_only=args.dump_only,
         )
     else:
         planning_doc = run_synthesize(
-            client, npc_files, arc_score_files, extract_files, context_files, args.model
+            client, npc_files, arc_score_files, extract_files, context_files, args.model,
+            dump_input=args.dump_input,
+            dump_only=args.dump_only,
         )
     print("=" * 60)
+
+    if args.dump_only:
+        return
 
     output.parent.mkdir(parents=True, exist_ok=True)
     output.write_text(planning_doc.strip() + "\n", encoding="utf-8")

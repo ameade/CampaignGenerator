@@ -203,6 +203,8 @@ def run_synthesize_pipeline(
     file_separator: str = "\n\n---\n\n",
     input_normalizer=None,
     system_suffix: str = "",
+    dump_input: str | None = None,
+    dump_only: bool = False,
 ) -> str:
     """Concat labeled file groups into a user prompt, call `stream_api`, return the response.
 
@@ -226,6 +228,10 @@ def run_synthesize_pipeline(
                        contents before it is rendered into the prompt.
     system_suffix    — optional string appended to `synthesize_system` with a
                        blank-line separator.
+    dump_input       — if set, write the assembled user prompt to this path and
+                       the system prompt to <path>.system.md (for `claude -p`).
+    dump_only        — with dump_input: skip the API call and return "".
+                       Callers should guard: `if dump_only: return` before writing output.
     """
     parts: list[str] = []
     total_files = 0
@@ -255,6 +261,18 @@ def run_synthesize_pipeline(
         synthesize_system = synthesize_system + "\n\n" + system_suffix
 
     user_prompt = group_separator.join(parts)
+
+    if dump_input:
+        dump_path = Path(dump_input).expanduser().resolve()
+        dump_path.write_text(user_prompt, encoding="utf-8")
+        system_path = dump_path.with_suffix(dump_path.suffix + ".system.md")
+        system_path.write_text(synthesize_system, encoding="utf-8")
+        print(f"Dumped synthesis input: {dump_path}")
+        print(f"Dumped system prompt:   {system_path}")
+        if dump_only:
+            print("[--dump-only: stopping before the API call]")
+            return ""
+
     print(f"  Synthesizing {total_files} source file(s) ({len(user_prompt):,} chars total)...")
     print("  " + "─" * 56)
     result = stream_api(client, synthesize_system, user_prompt, model)
