@@ -412,6 +412,9 @@ def main() -> None:
     p.add_argument("--endpoints", nargs="+", default=None, metavar="URL",
                    help="Multiple endpoints to fan out across concurrently (one worker per "
                         "endpoint, work-stealing). Overrides --dgx-endpoint. All must serve --model.")
+    p.add_argument("--entity-parallel", type=int, default=None, metavar="N",
+                   help="Number of entities to aggregate concurrently (default: one per endpoint). "
+                        "Set higher than the endpoint count to parallelise on a single endpoint.")
     p.add_argument("--model", default=None, metavar="ID",
                    help=f"Model id (default: $DGX_MODEL on a DGX endpoint, else {DEFAULT_MODEL}).")
     p.add_argument("--max-tokens", type=int, default=8000, metavar="N",
@@ -524,7 +527,9 @@ def main() -> None:
                     errors.append(f"{b.type}:{b.display}: {e!r}")
                     print(f"  ERROR {b.type}: {b.display}: {e!r}", file=sys.stderr)
 
-    threads = [threading.Thread(target=worker, args=(ep,), daemon=True) for ep in endpoints]
+    n_workers = args.entity_parallel if args.entity_parallel is not None else len(endpoints)
+    threads = [threading.Thread(target=worker, args=(endpoints[i % len(endpoints)],), daemon=True)
+               for i in range(n_workers)]
     for t in threads:
         t.start()
     for t in threads:

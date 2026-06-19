@@ -261,6 +261,11 @@ def main() -> None:
                              "'Known NPCs' roster seeds the system prompts.")
     parser.add_argument("--model", default=DEFAULT_MODEL,
                         help="Claude model to use")
+    parser.add_argument("--dump-input", default=None, metavar="FILE",
+                        help="Write the synthesis prompt to FILE (and FILE.system.md) "
+                             "without making an API call — for use with `claude -p`.")
+    parser.add_argument("--dump-only", action="store_true",
+                        help="With --dump-input: stop after writing the dump, making no API call.")
     args = parser.parse_args()
 
     if args.synthesize_only and args.extract_only:
@@ -379,10 +384,26 @@ def main() -> None:
             sys.exit(1)
         user_prompt = "\n\n===\n\n".join(parts)
         system_prompt = SYNTHESIZE_SYSTEM + ("\n\n" + roster if roster else "")
-        print(f"  Synthesizing per-character party block ({len(user_prompt):,} chars)...")
-        print("  " + "─" * 56)
-        party_doc = stream_api(client, system_prompt, user_prompt, args.model)
-        print("  " + "─" * 56)
+        if args.dump_input:
+            dump_path = Path(args.dump_input).expanduser().resolve()
+            dump_path.write_text(user_prompt, encoding="utf-8")
+            system_path = dump_path.with_suffix(dump_path.suffix + ".system.md")
+            system_path.write_text(system_prompt, encoding="utf-8")
+            print(f"Dumped synthesis input: {dump_path}")
+            print(f"Dumped system prompt:   {system_path}")
+            if args.dump_only:
+                print("[--dump-only: stopping before the API call]")
+                party_doc = ""
+            else:
+                print(f"  Synthesizing per-character party block ({len(user_prompt):,} chars)...")
+                print("  " + "─" * 56)
+                party_doc = stream_api(client, system_prompt, user_prompt, args.model)
+                print("  " + "─" * 56)
+        else:
+            print(f"  Synthesizing per-character party block ({len(user_prompt):,} chars)...")
+            print("  " + "─" * 56)
+            party_doc = stream_api(client, system_prompt, user_prompt, args.model)
+            print("  " + "─" * 56)
     else:
         party_doc = run_synthesize_pipeline(
             client,
@@ -397,8 +418,13 @@ def main() -> None:
             model=args.model,
             input_normalizer=normalize,
             system_suffix=roster,
+            dump_input=args.dump_input,
+            dump_only=args.dump_only,
         )
     print("=" * 60)
+
+    if args.dump_only:
+        return
 
     # party.md is hand-edited downstream — write to a sibling candidate file
     # when the target already exists, so a regenerated draft can be merged
