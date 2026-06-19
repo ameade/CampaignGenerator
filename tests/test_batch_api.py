@@ -197,6 +197,48 @@ def test_poll_batch_exits_when_ended():
     assert ticks == ["ended"]
 
 
+def test_poll_batch_sleeps_between_polls_until_ended():
+    """A batch that isn't done on the first retrieve must hit the poll-interval
+    sleep (batch.py:119). The interval=0 / first-poll-ended test above skips it,
+    which is exactly how the missing `import time` (issue #98) slipped through.
+    """
+    client = MagicMock()
+    in_progress = SimpleNamespace(
+        id="b", processing_status="in_progress", request_counts=None)
+    ended = SimpleNamespace(
+        id="b", processing_status="ended", request_counts=None)
+    client.messages.batches.retrieve.side_effect = [in_progress, ended]
+
+    # Patch the real time module's sleep — batch.py looks up `time.sleep` at
+    # call time, so a missing `import time` raises NameError here regardless.
+    with patch("time.sleep") as mock_sleep:
+        out = campaignlib.poll_batch(client, "b", interval=10)
+
+    assert out.processing_status == "ended"
+    assert client.messages.batches.retrieve.call_count == 2
+    mock_sleep.assert_called_once_with(10)  # the poll interval (batch.py:119)
+
+
+def test_submit_batch_retries_after_transient_error():
+    """A retryable error on create() must back off and retry (batch.py:71),
+    which also requires `time` to be importable."""
+    httpx = pytest.importorskip("httpx")
+    client = MagicMock()
+    client.messages.batches.create.side_effect = [
+        httpx.ConnectError("transient"),
+        SimpleNamespace(id="ok"),
+    ]
+    requests = [campaignlib.build_batch_request(
+        custom_id="x", system="s", user="u", model="m", max_tokens=10)]
+
+    with patch("time.sleep") as mock_sleep:
+        out = campaignlib.submit_batch(client, requests)
+
+    assert out == "ok"
+    assert client.messages.batches.create.call_count == 2
+    mock_sleep.assert_called_once_with(10)  # first backoff delay (batch.py:71)
+
+
 def test_collect_batch_extracts_text_and_usage():
     msg = SimpleNamespace(
         content=[SimpleNamespace(type="text", text="HELLO WORLD")],
