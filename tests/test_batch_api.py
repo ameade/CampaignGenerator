@@ -77,7 +77,7 @@ def test_live_and_batch_paths_write_byte_identical_files(tmp_path):
 
     # Live path: real run_scene_extraction with stream_api stubbed.
     live_dir = tmp_path / "live"
-    with patch.object(campaignlib, "stream_api", return_value=fake_text):
+    with patch.object(campaignlib.scenes, "stream_api", return_value=fake_text):
         campaignlib.run_scene_extraction(
             client=None, vtt_text="VTT", scenes=scenes,
             extract_dir=live_dir, model="m",

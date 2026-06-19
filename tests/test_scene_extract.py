@@ -85,7 +85,7 @@ def test_run_scene_extraction_writes_one_file_per_scene(tmp_path):
         captured.append({"system": system, "user": user, "cache": cache_system})
         return f"FAKE EXTRACTED MOMENTS for {scenes[len(captured) - 1]['name']}"
 
-    with patch.object(campaignlib, "stream_api", side_effect=fake_stream):
+    with patch.object(campaignlib.scenes, "stream_api", side_effect=fake_stream):
         out = campaignlib.run_scene_extraction(
             client=None,
             vtt_text="GM: hello\nThorin: hi",
@@ -115,7 +115,7 @@ def test_run_scene_extraction_caches_system_by_default(tmp_path):
         captured.append(cache_system)
         return "moments"
 
-    with patch.object(campaignlib, "stream_api", side_effect=fake_stream):
+    with patch.object(campaignlib.scenes, "stream_api", side_effect=fake_stream):
         campaignlib.run_scene_extraction(
             client=None, vtt_text="VTT", scenes=scenes,
             extract_dir=tmp_path, model="m",
@@ -138,7 +138,7 @@ def test_run_scene_extraction_resumes_existing_files(tmp_path):
         calls.append(user)
         return "fresh"
 
-    with patch.object(campaignlib, "stream_api", side_effect=fake_stream):
+    with patch.object(campaignlib.scenes, "stream_api", side_effect=fake_stream):
         campaignlib.run_scene_extraction(
             client=None, vtt_text="VTT", scenes=scenes,
             extract_dir=tmp_path, model="m",
@@ -164,7 +164,7 @@ def test_run_scene_extraction_force_overwrites_and_snapshots_prev(tmp_path):
                     verbose=False, cache_system=False):
         return "FRESH MOMENTS"
 
-    with patch.object(campaignlib, "stream_api", side_effect=fake_stream):
+    with patch.object(campaignlib.scenes, "stream_api", side_effect=fake_stream):
         campaignlib.run_scene_extraction(
             client=None, vtt_text="VTT", scenes=scenes,
             extract_dir=tmp_path, model="m",
@@ -192,7 +192,7 @@ def test_run_scene_extraction_force_skips_overwrite_when_identical(tmp_path):
                     verbose=False, cache_system=False):
         return "MOMENTS"
 
-    with patch.object(campaignlib, "stream_api", side_effect=fake_stream):
+    with patch.object(campaignlib.scenes, "stream_api", side_effect=fake_stream):
         campaignlib.run_scene_extraction(
             client=None, vtt_text="VTT", scenes=scenes,
             extract_dir=tmp_path, model="m",
@@ -217,7 +217,7 @@ def test_run_scene_extraction_default_still_skips_existing(tmp_path):
         calls.append(user)
         return "fresh"
 
-    with patch.object(campaignlib, "stream_api", side_effect=fake_stream):
+    with patch.object(campaignlib.scenes, "stream_api", side_effect=fake_stream):
         campaignlib.run_scene_extraction(
             client=None, vtt_text="VTT", scenes=scenes,
             extract_dir=tmp_path, model="m",

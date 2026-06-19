@@ -28,7 +28,7 @@ class FakeStreamAPI:
 @pytest.fixture
 def fake_stream_api(monkeypatch):
     fake = FakeStreamAPI()
-    monkeypatch.setattr(campaignlib, "stream_api", fake)
+    monkeypatch.setattr(campaignlib.pipelines, "stream_api", fake)
     return fake
 
 
@@ -251,7 +251,7 @@ def test_synthesize_per_group_label_override(fake_stream_api, tmp_path):
 
 def test_synthesize_returns_stream_response(monkeypatch, tmp_path):
     fake = FakeStreamAPI(responses=["scripted result"])
-    monkeypatch.setattr(campaignlib, "stream_api", fake)
+    monkeypatch.setattr(campaignlib.pipelines, "stream_api", fake)
     f1 = _write(tmp_path / "a.md", "x")
 
     result = campaignlib.run_synthesize_pipeline(
