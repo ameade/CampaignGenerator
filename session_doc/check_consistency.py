@@ -35,7 +35,7 @@ from campaignlib.consistency import (
     ConsistencyDocument,
     GroupedConsistencyProtocolError,
     normalize_grouped_response,
-    render_grouped_prompt,
+    render_grouped_prompt_blocks,
 )
 
 # This file lives at session_doc/check_consistency.py; find_default_config()'s
@@ -195,12 +195,19 @@ def main() -> None:
     print("=" * 60)
 
     if grouped:
-        prompt = render_grouped_prompt(documents, context_parts)
+        prompt = render_grouped_prompt_blocks(documents, context_parts)
     else:
-        prompt = "\n\n---\n\n".join([
-            f"## Document to Check\n\n{documents[0].text}",
-            context_text,
-        ])
+        prompt = [
+            {
+                "type": "text",
+                "text": context_text + "\n\n---\n\n",
+                "cache_control": {"type": "ephemeral"},
+            },
+            {
+                "type": "text",
+                "text": f"## Document to Check\n\n{documents[0].text}",
+            },
+        ]
 
     try:
         client = client_from_args(args)
