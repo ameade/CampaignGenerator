@@ -30,6 +30,12 @@ rejected_aliases:
 """
 
 
+def _content_text(content) -> str:
+    if isinstance(content, str):
+        return content
+    return "".join(block["text"] for block in content)
+
+
 def _make_campaign(tmp_path: Path) -> Path:
     campaign_dir = tmp_path / "campaign"
     (campaign_dir / "docs").mkdir(parents=True)
@@ -59,7 +65,7 @@ def test_check_consistency_auto_loads_registry_as_canon(tmp_path, monkeypatch):
     check_consistency.main()
 
     assert len(calls) == 1
-    user_prompt = calls[0]["user"]
+    user_prompt = _content_text(calls[0]["user"])
     assert "AUTHORITATIVE CANON" in user_prompt
     assert "Kalan Strongbranch" in user_prompt
     assert "Ilvara" in user_prompt and "Sylvira" in user_prompt  # distinct pair rendered
@@ -98,8 +104,9 @@ def test_check_consistency_context_accumulates_across_repeats(tmp_path, monkeypa
 
     check_consistency.main()
 
-    assert "Context A content." in calls[0]
-    assert "Context B content." in calls[0]
+    prompt = _content_text(calls[0])
+    assert "Context A content." in prompt
+    assert "Context B content." in prompt
 
 
 def test_check_consistency_skips_auto_loaded_registry_context(
@@ -126,8 +133,9 @@ def test_check_consistency_skips_auto_loaded_registry_context(
 
     check_consistency.main()
 
-    assert calls[0].count("AUTHORITATIVE CANON") == 1
-    assert "version: 1" not in calls[0]
+    prompt = _content_text(calls[0])
+    assert prompt.count("AUTHORITATIVE CANON") == 1
+    assert "version: 1" not in prompt
     stderr = capsys.readouterr().err
     assert str(registry_link) in stderr
     assert "already included as authoritative canon" in stderr
@@ -156,8 +164,9 @@ def test_check_consistency_no_registry_omits_canon_section(tmp_path, monkeypatch
 
     check_consistency.main()
 
-    assert "AUTHORITATIVE CANON" not in calls[0]
-    assert "Party roster." in calls[0]
+    prompt = _content_text(calls[0])
+    assert "AUTHORITATIVE CANON" not in prompt
+    assert "Party roster." in prompt
 
 
 def test_check_consistency_explicit_registry_remains_when_not_auto_loaded(
@@ -185,8 +194,9 @@ def test_check_consistency_explicit_registry_remains_when_not_auto_loaded(
 
     check_consistency.main()
 
-    assert "AUTHORITATIVE CANON" not in calls[0]
-    assert "version: 1" in calls[0]
+    prompt = _content_text(calls[0])
+    assert "AUTHORITATIVE CANON" not in prompt
+    assert "version: 1" in prompt
 
 
 def test_sd_consistency_auto_loads_registry_as_canon(tmp_path, monkeypatch):
@@ -213,8 +223,9 @@ def test_sd_consistency_auto_loads_registry_as_canon(tmp_path, monkeypatch):
     sd_consistency.main()
 
     assert len(calls) == 1
-    assert "AUTHORITATIVE CANON" in calls[0]
-    assert "Kalan Strongbranch" in calls[0]
+    prompt = _content_text(calls[0])
+    assert "AUTHORITATIVE CANON" in prompt
+    assert "Kalan Strongbranch" in prompt
 
 
 def test_sd_consistency_skips_auto_loaded_registry_context(
@@ -243,8 +254,9 @@ def test_sd_consistency_skips_auto_loaded_registry_context(
 
     sd_consistency.main()
 
-    assert calls[0].count("AUTHORITATIVE CANON") == 1
-    assert "version: 1" not in calls[0]
+    prompt = _content_text(calls[0])
+    assert prompt.count("AUTHORITATIVE CANON") == 1
+    assert "version: 1" not in prompt
     stderr = capsys.readouterr().err
     assert str(registry_link) in stderr
     assert "already included as authoritative canon" in stderr
@@ -276,5 +288,6 @@ def test_sd_consistency_explicit_registry_remains_when_not_auto_loaded(
 
     sd_consistency.main()
 
-    assert "AUTHORITATIVE CANON" not in calls[0]
-    assert "version: 1" in calls[0]
+    prompt = _content_text(calls[0])
+    assert "AUTHORITATIVE CANON" not in prompt
+    assert "version: 1" in prompt
