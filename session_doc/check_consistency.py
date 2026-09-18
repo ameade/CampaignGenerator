@@ -185,7 +185,16 @@ def main() -> None:
     else:
         document = documents[0]
         print(f"Document : {document.path.name} ({len(document.text):,} chars)")
-        print(f"Context  : {len(context_parts)} document(s)")
+        print(
+            f"Context  : {len(context_parts)} document(s), "
+            f"{common_context_chars:,} shared chars"
+        )
+        print(
+            "Telemetry : "
+            f"model_calls=1 shared_context_chars={common_context_chars} "
+            f"target_chars={len(document.text)} "
+            "repeated_context_chars_avoided=0"
+        )
     model_display = (
         args.model
         if args.model is not None

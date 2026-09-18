@@ -79,6 +79,18 @@ def test_codex_cli_preserves_prompt_and_report_workflow(tmp_path, monkeypatch, c
     stdout = capsys.readouterr().out
     assert "Found 1 potential issue" in stdout
     assert "Codex subscription default" in stdout
+    context_text = user[0]["text"].removesuffix("\n\n---\n\n")
+    expected_shared_chars = len(system) + len(context_text)
+    assert (
+        f"Context  : 3 document(s), {expected_shared_chars:,} shared chars"
+        in stdout
+    )
+    assert (
+        "Telemetry : model_calls=1 "
+        f"shared_context_chars={expected_shared_chars} "
+        "target_chars=17 repeated_context_chars_avoided=0"
+        in stdout
+    )
 
 
 @pytest.mark.parametrize(

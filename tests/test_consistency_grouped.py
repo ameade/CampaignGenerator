@@ -246,6 +246,7 @@ def test_grouped_cli_uses_one_call_and_writes_one_normalized_report(
     assert "Documents : 2" in stdout
     assert "Model calls: 1" in stdout
     assert "model_calls=1 shared_context_chars=" in stdout
+    assert "repeated_context_chars_avoided=" in stdout
     assert "Found 1 potential issue" in stdout
 
 
