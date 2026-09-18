@@ -23,6 +23,7 @@ from campaignlib import (
     assemble_docs,
     canonical_context_section,
     client_from_args,
+    find_registry,
     find_default_config,
     load_agent_prompt,
     load_config,
@@ -126,7 +127,9 @@ def main() -> None:
 
     context_parts: list[str] = []
 
+    registry_path = find_registry(base_dir)
     canon = canonical_context_section(base_dir)
+    canonical_registry_path = registry_path.resolve() if canon and registry_path else None
     if canon:
         context_parts.append(canon)
     else:
@@ -145,6 +148,13 @@ def main() -> None:
         for ctx in args.context:
             p = Path(ctx).expanduser()
             if p.exists():
+                if canonical_registry_path is not None and p.resolve() == canonical_registry_path:
+                    print(
+                        f"  Note: skipping --context {p}; already included as "
+                        "authoritative canon.",
+                        file=sys.stderr,
+                    )
+                    continue
                 context_parts.append(f"## {p.name}\n\n{p.read_text(encoding='utf-8').strip()}")
             else:
                 print(f"  Warning: context file not found: {p}", file=sys.stderr)
